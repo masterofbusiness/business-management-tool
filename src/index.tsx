@@ -34,9 +34,17 @@ app.post('/api/customers', async (c) => {
       INSERT INTO customers (company_name, contact_person, email, phone, address, city, postal_code, country, tax_number, hourly_rate, notes)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
-      data.company_name, data.contact_person, data.email, data.phone,
-      data.address, data.city, data.postal_code, data.country,
-      data.tax_number, data.hourly_rate || 0, data.notes
+      data.company_name || '',
+      data.contact_person || null,
+      data.email || null,
+      data.phone || null,
+      data.address || null,
+      data.city || null,
+      data.postal_code || null,
+      data.country || 'Schweiz',
+      data.tax_number || null,
+      data.hourly_rate || 0,
+      data.notes || null
     ).run()
 
     if (success) {
@@ -61,9 +69,18 @@ app.put('/api/customers/:id', async (c) => {
         tax_number = ?, hourly_rate = ?, notes = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).bind(
-      data.company_name, data.contact_person, data.email, data.phone,
-      data.address, data.city, data.postal_code, data.country,
-      data.tax_number, data.hourly_rate, data.notes, id
+      data.company_name || '',
+      data.contact_person || null,
+      data.email || null,
+      data.phone || null,
+      data.address || null,
+      data.city || null,
+      data.postal_code || null,
+      data.country || 'Schweiz',
+      data.tax_number || null,
+      data.hourly_rate || 0,
+      data.notes || null,
+      id
     ).run()
 
     if (success) {
@@ -124,9 +141,15 @@ app.post('/api/time-entries', async (c) => {
       INSERT INTO time_entries (customer_id, project_id, description, start_time, end_time, duration_minutes, hourly_rate, is_billable, notes)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
-      data.customer_id, data.project_id, data.description,
-      data.start_time, data.end_time, duration_minutes,
-      data.hourly_rate, data.is_billable ?? 1, data.notes
+      data.customer_id || null,
+      data.project_id || null,
+      data.description || '',
+      data.start_time || null,
+      data.end_time || null,
+      duration_minutes || null,
+      data.hourly_rate || null,
+      data.is_billable ?? 1,
+      data.notes || null
     ).run()
 
     if (success) {
@@ -136,6 +159,62 @@ app.post('/api/time-entries', async (c) => {
   } catch (error) {
     console.error('Error creating time entry:', error)
     return c.json({ error: 'Failed to create time entry' }, 500)
+  }
+})
+
+app.put('/api/time-entries/:id', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const data = await c.req.json()
+    
+    // Calculate duration if end_time is provided
+    let duration_minutes = data.duration_minutes
+    if (data.start_time && data.end_time) {
+      const start = new Date(data.start_time)
+      const end = new Date(data.end_time)
+      duration_minutes = Math.round((end.getTime() - start.getTime()) / 60000)
+    }
+    
+    const { success } = await c.env.DB.prepare(`
+      UPDATE time_entries SET 
+        customer_id = ?, project_id = ?, description = ?, start_time = ?, end_time = ?, 
+        duration_minutes = ?, hourly_rate = ?, is_billable = ?, notes = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(
+      data.customer_id || null,
+      data.project_id || null,
+      data.description || '',
+      data.start_time || null,
+      data.end_time || null,
+      duration_minutes || null,
+      data.hourly_rate || null,
+      data.is_billable ?? 1,
+      data.notes || null,
+      id
+    ).run()
+
+    if (success) {
+      return c.json({ id, ...data, duration_minutes })
+    }
+    throw new Error('Failed to update time entry')
+  } catch (error) {
+    console.error('Error updating time entry:', error)
+    return c.json({ error: 'Failed to update time entry' }, 500)
+  }
+})
+
+app.delete('/api/time-entries/:id', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const { success } = await c.env.DB.prepare('DELETE FROM time_entries WHERE id = ?').bind(id).run()
+    
+    if (success) {
+      return c.json({ success: true })
+    }
+    throw new Error('Failed to delete time entry')
+  } catch (error) {
+    console.error('Error deleting time entry:', error)
+    return c.json({ error: 'Failed to delete time entry' }, 500)
   }
 })
 

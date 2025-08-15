@@ -554,20 +554,37 @@ function showTimerSaveModal() {
     const description = document.getElementById('timer-description').value;
     const durationMinutes = Math.floor(timerSeconds / 60);
     
+    // Ensure we have customers loaded
+    if (currentCustomers.length === 0) {
+        showNotification('Bitte erst Kunden anlegen, bevor Timer gespeichert werden können', 'error');
+        return;
+    }
+    
     const customerOptions = currentCustomers.map(customer => 
         `<option value="${customer.id}">${customer.company_name}</option>`
+    ).join('');
+    
+    // Also load projects for selection
+    const projectOptions = currentProjects.map(project => 
+        `<option value="${project.id}" data-customer="${project.customer_id}">${project.name} (${project.company_name})</option>`
     ).join('');
     
     const modalHtml = `
         <div class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50" id="timer-save-modal">
             <div class="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
                 <div class="mt-3">
-                    <h3 class="text-lg font-medium text-gray-900 mb-4">Timer speichern</h3>
+                    <h3 class="text-lg font-medium text-gray-900 mb-4">
+                        <i class="fas fa-clock text-green-600 mr-2"></i>
+                        Timer speichern
+                    </h3>
                     <form id="timer-save-form">
                         <div class="space-y-4">
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700">Dauer</label>
-                                <p class="text-lg font-semibold text-gray-900">${formatDuration(durationMinutes)}</p>
+                            <div class="bg-green-50 p-3 rounded-md">
+                                <div class="flex items-center">
+                                    <i class="fas fa-stopwatch text-green-600 mr-2"></i>
+                                    <span class="text-sm text-green-800">Erfasste Zeit:</span>
+                                    <span class="text-lg font-bold text-green-900 ml-2">${formatDuration(durationMinutes)}</span>
+                                </div>
                             </div>
                             <div>
                                 <label class="block text-sm font-medium text-gray-700">Kunde *</label>
@@ -577,16 +594,27 @@ function showTimerSaveModal() {
                                 </select>
                             </div>
                             <div>
-                                <label class="block text-sm font-medium text-gray-700">Beschreibung</label>
-                                <textarea id="timer_description" rows="3" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md">${description}</textarea>
+                                <label class="block text-sm font-medium text-gray-700">Projekt (optional)</label>
+                                <select id="timer_project_id" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md">
+                                    <option value="">Kein Projekt</option>
+                                    ${projectOptions}
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Beschreibung der Tätigkeit *</label>
+                                <textarea id="timer_description" required rows="3" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="Was wurde gemacht?">${description}</textarea>
+                            </div>
+                            <div class="flex items-center">
+                                <input type="checkbox" id="timer_is_billable" class="h-4 w-4 text-green-600 focus:ring-green-500 border-gray-300 rounded" checked>
+                                <label for="timer_is_billable" class="ml-2 block text-sm text-gray-900">Abrechenbar</label>
                             </div>
                         </div>
                         <div class="flex justify-end space-x-3 mt-6">
-                            <button type="button" onclick="closeModal('timer-save-modal')" class="px-4 py-2 bg-gray-300 text-gray-700 rounded-md hover:bg-gray-400">
-                                Verwerfen
+                            <button type="button" onclick="discardTimer()" class="px-4 py-2 bg-gray-300 text-gray-700 rounded-md hover:bg-gray-400">
+                                <i class="fas fa-trash mr-1"></i>Verwerfen
                             </button>
                             <button type="submit" class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700">
-                                Speichern
+                                <i class="fas fa-save mr-1"></i>Speichern
                             </button>
                         </div>
                     </form>
@@ -601,11 +629,32 @@ function showTimerSaveModal() {
         e.preventDefault();
         await saveTimerEntry(durationMinutes);
     });
+    
+    // Update projects when customer changes
+    document.getElementById('timer_customer_id').addEventListener('change', function() {
+        const customerId = this.value;
+        const projectSelect = document.getElementById('timer_project_id');
+        const options = projectSelect.querySelectorAll('option[data-customer]');
+        
+        options.forEach(option => {
+            if (option.dataset.customer === customerId || !customerId) {
+                option.style.display = 'block';
+            } else {
+                option.style.display = 'none';
+            }
+        });
+        
+        if (customerId) {
+            projectSelect.value = '';
+        }
+    });
 }
 
 async function saveTimerEntry(durationMinutes) {
     const customerId = document.getElementById('timer_customer_id').value;
+    const projectId = document.getElementById('timer_project_id').value;
     const description = document.getElementById('timer_description').value;
+    const isBillable = document.getElementById('timer_is_billable').checked;
     
     if (!customerId || !description) {
         showNotification('Bitte Kunde und Beschreibung ausfüllen', 'error');
@@ -615,13 +664,19 @@ async function saveTimerEntry(durationMinutes) {
     const now = new Date();
     const startTime = new Date(now.getTime() - (durationMinutes * 60000));
     
+    // Get customer's hourly rate
+    const customer = currentCustomers.find(c => c.id == customerId);
+    const hourlyRate = customer ? customer.hourly_rate : 0;
+    
     const formData = {
         customer_id: parseInt(customerId),
+        project_id: projectId ? parseInt(projectId) : null,
         description: description,
         start_time: startTime.toISOString(),
         end_time: now.toISOString(),
         duration_minutes: durationMinutes,
-        is_billable: 1
+        hourly_rate: hourlyRate,
+        is_billable: isBillable ? 1 : 0
     };
     
     try {
@@ -629,10 +684,18 @@ async function saveTimerEntry(durationMinutes) {
         closeModal('timer-save-modal');
         resetTimer();
         await loadTimeEntries();
-        showNotification('Zeiteintrag erfolgreich gespeichert!', 'success');
+        showNotification(`Zeiteintrag erfolgreich gespeichert! (${formatDuration(durationMinutes)})`, 'success');
     } catch (error) {
         console.error('Error saving timer entry:', error);
         showNotification('Fehler beim Speichern des Zeiteintrags', 'error');
+    }
+}
+
+function discardTimer() {
+    if (confirm('Möchten Sie die erfasste Zeit wirklich verwerfen? Diese Aktion kann nicht rückgängig gemacht werden.')) {
+        closeModal('timer-save-modal');
+        resetTimer();
+        showNotification('Timer wurde zurückgesetzt', 'info');
     }
 }
 
