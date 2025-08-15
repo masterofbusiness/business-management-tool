@@ -308,6 +308,490 @@ app.delete('/api/projects/:id', async (c) => {
   }
 })
 
+// API Routes - Invoices (Rechnungen)
+app.get('/api/invoices', async (c) => {
+  try {
+    const { results } = await c.env.DB.prepare(`
+      SELECT i.*, c.company_name, c.contact_person, c.email
+      FROM invoices i
+      LEFT JOIN customers c ON i.customer_id = c.id
+      ORDER BY i.created_at DESC
+    `).all()
+    return c.json({ invoices: results })
+  } catch (error) {
+    console.error('Error fetching invoices:', error)
+    return c.json({ error: 'Failed to fetch invoices' }, 500)
+  }
+})
+
+app.get('/api/invoices/:id', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const { results: invoices } = await c.env.DB.prepare(`
+      SELECT i.*, c.company_name, c.contact_person, c.email, c.address, c.city, c.postal_code, c.country
+      FROM invoices i
+      LEFT JOIN customers c ON i.customer_id = c.id
+      WHERE i.id = ?
+    `).bind(id).all()
+    
+    if (invoices.length === 0) {
+      return c.json({ error: 'Invoice not found' }, 404)
+    }
+    
+    const { results: items } = await c.env.DB.prepare(`
+      SELECT ii.*, te.description as time_description, te.start_time, te.duration_minutes
+      FROM invoice_items ii
+      LEFT JOIN time_entries te ON ii.time_entry_id = te.id
+      WHERE ii.invoice_id = ?
+      ORDER BY ii.id
+    `).bind(id).all()
+    
+    return c.json({ invoice: invoices[0], items: items })
+  } catch (error) {
+    console.error('Error fetching invoice:', error)
+    return c.json({ error: 'Failed to fetch invoice' }, 500)
+  }
+})
+
+app.post('/api/invoices', async (c) => {
+  try {
+    const data = await c.req.json()
+    
+    // Generate invoice number if not provided
+    let invoiceNumber = data.invoice_number
+    if (!invoiceNumber) {
+      const year = new Date().getFullYear()
+      const { results } = await c.env.DB.prepare(`
+        SELECT COUNT(*) as count FROM invoices WHERE invoice_number LIKE ?
+      `).bind(`RE-${year}-%`).all()
+      const count = results[0]?.count || 0
+      invoiceNumber = `RE-${year}-${String(count + 1).padStart(3, '0')}`
+    }
+    
+    const { success, meta } = await c.env.DB.prepare(`
+      INSERT INTO invoices (invoice_number, customer_id, issue_date, due_date, status, subtotal, tax_rate, tax_amount, total_amount, payment_terms, notes)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      invoiceNumber,
+      data.customer_id || null,
+      data.issue_date || new Date().toISOString().split('T')[0],
+      data.due_date || null,
+      data.status || 'draft',
+      data.subtotal || 0,
+      data.tax_rate || 8.1,
+      data.tax_amount || 0,
+      data.total_amount || 0,
+      data.payment_terms || '30 Tage',
+      data.notes || null
+    ).run()
+
+    if (success) {
+      // Add invoice items if provided
+      if (data.items && data.items.length > 0) {
+        for (const item of data.items) {
+          await c.env.DB.prepare(`
+            INSERT INTO invoice_items (invoice_id, time_entry_id, description, quantity, unit_price, total)
+            VALUES (?, ?, ?, ?, ?, ?)
+          `).bind(
+            meta.last_row_id,
+            item.time_entry_id || null,
+            item.description || '',
+            item.quantity || 1,
+            item.unit_price || 0,
+            item.total || 0
+          ).run()
+        }
+      }
+      
+      return c.json({ id: meta.last_row_id, invoice_number: invoiceNumber, ...data })
+    }
+    throw new Error('Failed to create invoice')
+  } catch (error) {
+    console.error('Error creating invoice:', error)
+    return c.json({ error: 'Failed to create invoice' }, 500)
+  }
+})
+
+app.put('/api/invoices/:id', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const data = await c.req.json()
+    
+    const { success } = await c.env.DB.prepare(`
+      UPDATE invoices SET 
+        customer_id = ?, issue_date = ?, due_date = ?, status = ?,
+        subtotal = ?, tax_rate = ?, tax_amount = ?, total_amount = ?,
+        payment_terms = ?, notes = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(
+      data.customer_id || null,
+      data.issue_date || null,
+      data.due_date || null,
+      data.status || 'draft',
+      data.subtotal || 0,
+      data.tax_rate || 8.1,
+      data.tax_amount || 0,
+      data.total_amount || 0,
+      data.payment_terms || '30 Tage',
+      data.notes || null,
+      id
+    ).run()
+
+    if (success) {
+      // Update invoice items if provided
+      if (data.items) {
+        // Delete existing items
+        await c.env.DB.prepare('DELETE FROM invoice_items WHERE invoice_id = ?').bind(id).run()
+        
+        // Add new items
+        for (const item of data.items) {
+          await c.env.DB.prepare(`
+            INSERT INTO invoice_items (invoice_id, time_entry_id, description, quantity, unit_price, total)
+            VALUES (?, ?, ?, ?, ?, ?)
+          `).bind(
+            id,
+            item.time_entry_id || null,
+            item.description || '',
+            item.quantity || 1,
+            item.unit_price || 0,
+            item.total || 0
+          ).run()
+        }
+      }
+      
+      return c.json({ id, ...data })
+    }
+    throw new Error('Failed to update invoice')
+  } catch (error) {
+    console.error('Error updating invoice:', error)
+    return c.json({ error: 'Failed to update invoice' }, 500)
+  }
+})
+
+app.delete('/api/invoices/:id', async (c) => {
+  try {
+    const id = c.req.param('id')
+    
+    // Delete invoice items first (foreign key constraint)
+    await c.env.DB.prepare('DELETE FROM invoice_items WHERE invoice_id = ?').bind(id).run()
+    
+    // Delete invoice
+    const { success } = await c.env.DB.prepare('DELETE FROM invoices WHERE id = ?').bind(id).run()
+    
+    if (success) {
+      return c.json({ success: true })
+    }
+    throw new Error('Failed to delete invoice')
+  } catch (error) {
+    console.error('Error deleting invoice:', error)
+    return c.json({ error: 'Failed to delete invoice' }, 500)
+  }
+})
+
+// Special route to create invoice from time entries
+app.post('/api/invoices/from-time-entries', async (c) => {
+  try {
+    const data = await c.req.json()
+    const { customer_id, time_entry_ids, issue_date, due_date, payment_terms, notes } = data
+    
+    if (!customer_id || !time_entry_ids || time_entry_ids.length === 0) {
+      return c.json({ error: 'Customer ID and time entry IDs are required' }, 400)
+    }
+    
+    // Get time entries
+    const placeholders = time_entry_ids.map(() => '?').join(',')
+    const { results: timeEntries } = await c.env.DB.prepare(`
+      SELECT te.*, c.hourly_rate as customer_hourly_rate
+      FROM time_entries te
+      LEFT JOIN customers c ON te.customer_id = c.id
+      WHERE te.id IN (${placeholders}) AND te.customer_id = ? AND te.is_billable = 1 AND te.is_billed = 0
+    `).bind(...time_entry_ids, customer_id).all()
+    
+    if (timeEntries.length === 0) {
+      return c.json({ error: 'No billable time entries found' }, 400)
+    }
+    
+    // Calculate totals
+    let subtotal = 0
+    const items = timeEntries.map(entry => {
+      const hours = (entry.duration_minutes || 0) / 60
+      const rate = entry.hourly_rate || entry.customer_hourly_rate || 0
+      const total = hours * rate
+      subtotal += total
+      
+      return {
+        time_entry_id: entry.id,
+        description: entry.description,
+        quantity: hours,
+        unit_price: rate,
+        total: total
+      }
+    })
+    
+    const taxRate = 8.1
+    const taxAmount = subtotal * (taxRate / 100)
+    const totalAmount = subtotal + taxAmount
+    
+    // Generate invoice number  
+    const year = new Date().getFullYear()
+    const { results } = await c.env.DB.prepare(`
+      SELECT COUNT(*) as count FROM invoices WHERE invoice_number LIKE ?
+    `).bind(`RE-${year}-%`).all()
+    const count = results[0]?.count || 0
+    const invoiceNumber = `RE-${year}-${String(count + 1).padStart(3, '0')}`
+    
+    // Create invoice
+    const { success, meta } = await c.env.DB.prepare(`
+      INSERT INTO invoices (invoice_number, customer_id, issue_date, due_date, status, subtotal, tax_rate, tax_amount, total_amount, payment_terms, notes)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      invoiceNumber,
+      customer_id,
+      issue_date || new Date().toISOString().split('T')[0],
+      due_date || null,
+      'draft',
+      subtotal,
+      taxRate,
+      taxAmount,
+      totalAmount,
+      payment_terms || '30 Tage',
+      notes || null
+    ).run()
+
+    if (success) {
+      const invoiceId = meta.last_row_id
+      
+      // Add invoice items
+      for (const item of items) {
+        await c.env.DB.prepare(`
+          INSERT INTO invoice_items (invoice_id, time_entry_id, description, quantity, unit_price, total)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `).bind(
+          invoiceId,
+          item.time_entry_id,
+          item.description,
+          item.quantity,
+          item.unit_price,
+          item.total
+        ).run()
+      }
+      
+      // Mark time entries as billed
+      for (const entryId of time_entry_ids) {
+        await c.env.DB.prepare(`
+          UPDATE time_entries SET is_billed = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+        `).bind(entryId).run()
+      }
+      
+      return c.json({ 
+        id: invoiceId, 
+        invoice_number: invoiceNumber,
+        subtotal,
+        tax_amount: taxAmount,
+        total_amount: totalAmount,
+        items_count: items.length
+      })
+    }
+    throw new Error('Failed to create invoice from time entries')
+  } catch (error) {
+    console.error('Error creating invoice from time entries:', error)
+    return c.json({ error: 'Failed to create invoice from time entries' }, 500)
+  }
+})
+
+// API Routes - Quotes (Angebote/Offerte)
+app.get('/api/quotes', async (c) => {
+  try {
+    const { results } = await c.env.DB.prepare(`
+      SELECT q.*, c.company_name, c.contact_person, c.email
+      FROM quotes q
+      LEFT JOIN customers c ON q.customer_id = c.id
+      ORDER BY q.created_at DESC
+    `).all()
+    return c.json({ quotes: results })
+  } catch (error) {
+    console.error('Error fetching quotes:', error)
+    return c.json({ error: 'Failed to fetch quotes' }, 500)
+  }
+})
+
+app.get('/api/quotes/:id', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const { results: quotes } = await c.env.DB.prepare(`
+      SELECT q.*, c.company_name, c.contact_person, c.email, c.address, c.city, c.postal_code, c.country
+      FROM quotes q
+      LEFT JOIN customers c ON q.customer_id = c.id
+      WHERE q.id = ?
+    `).bind(id).all()
+    
+    if (quotes.length === 0) {
+      return c.json({ error: 'Quote not found' }, 404)
+    }
+    
+    const { results: items } = await c.env.DB.prepare(`
+      SELECT * FROM quote_items WHERE quote_id = ? ORDER BY id
+    `).bind(id).all()
+    
+    return c.json({ quote: quotes[0], items: items })
+  } catch (error) {
+    console.error('Error fetching quote:', error)
+    return c.json({ error: 'Failed to fetch quote' }, 500)
+  }
+})
+
+app.post('/api/quotes', async (c) => {
+  try {
+    const data = await c.req.json()
+    
+    // Generate quote number if not provided
+    let quoteNumber = data.quote_number
+    if (!quoteNumber) {
+      const year = new Date().getFullYear()
+      const { results } = await c.env.DB.prepare(`
+        SELECT COUNT(*) as count FROM quotes WHERE quote_number LIKE ?
+      `).bind(`OFF-${year}-%`).all()
+      const count = results[0]?.count || 0
+      quoteNumber = `OFF-${year}-${String(count + 1).padStart(3, '0')}`
+    }
+    
+    const { success, meta } = await c.env.DB.prepare(`
+      INSERT INTO quotes (quote_number, customer_id, issue_date, valid_until, status, subtotal, tax_rate, tax_amount, total_amount, notes, terms_conditions)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      quoteNumber,
+      data.customer_id || null,
+      data.issue_date || new Date().toISOString().split('T')[0],
+      data.valid_until || null,
+      data.status || 'draft',
+      data.subtotal || 0,
+      data.tax_rate || 8.1,
+      data.tax_amount || 0,
+      data.total_amount || 0,
+      data.notes || null,
+      data.terms_conditions || null
+    ).run()
+
+    if (success) {
+      // Add quote items if provided
+      if (data.items && data.items.length > 0) {
+        for (const item of data.items) {
+          await c.env.DB.prepare(`
+            INSERT INTO quote_items (quote_id, description, quantity, unit_price, total)
+            VALUES (?, ?, ?, ?, ?)
+          `).bind(
+            meta.last_row_id,
+            item.description || '',
+            item.quantity || 1,
+            item.unit_price || 0,
+            item.total || 0
+          ).run()
+        }
+      }
+      
+      return c.json({ id: meta.last_row_id, quote_number: quoteNumber, ...data })
+    }
+    throw new Error('Failed to create quote')
+  } catch (error) {
+    console.error('Error creating quote:', error)
+    return c.json({ error: 'Failed to create quote' }, 500)
+  }
+})
+
+app.put('/api/quotes/:id', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const data = await c.req.json()
+    
+    const { success } = await c.env.DB.prepare(`
+      UPDATE quotes SET 
+        customer_id = ?, issue_date = ?, valid_until = ?, status = ?,
+        subtotal = ?, tax_rate = ?, tax_amount = ?, total_amount = ?,
+        notes = ?, terms_conditions = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(
+      data.customer_id || null,
+      data.issue_date || null,
+      data.valid_until || null,
+      data.status || 'draft',
+      data.subtotal || 0,
+      data.tax_rate || 8.1,
+      data.tax_amount || 0,
+      data.total_amount || 0,
+      data.notes || null,
+      data.terms_conditions || null,
+      id
+    ).run()
+
+    if (success) {
+      // Update quote items if provided
+      if (data.items) {
+        // Delete existing items
+        await c.env.DB.prepare('DELETE FROM quote_items WHERE quote_id = ?').bind(id).run()
+        
+        // Add new items
+        for (const item of data.items) {
+          await c.env.DB.prepare(`
+            INSERT INTO quote_items (quote_id, description, quantity, unit_price, total)
+            VALUES (?, ?, ?, ?, ?)
+          `).bind(
+            id,
+            item.description || '',
+            item.quantity || 1,
+            item.unit_price || 0,
+            item.total || 0
+          ).run()
+        }
+      }
+      
+      return c.json({ id, ...data })
+    }
+    throw new Error('Failed to update quote')
+  } catch (error) {
+    console.error('Error updating quote:', error)
+    return c.json({ error: 'Failed to update quote' }, 500)
+  }
+})
+
+app.delete('/api/quotes/:id', async (c) => {
+  try {
+    const id = c.req.param('id')
+    
+    // Delete quote items first (foreign key constraint)
+    await c.env.DB.prepare('DELETE FROM quote_items WHERE quote_id = ?').bind(id).run()
+    
+    // Delete quote
+    const { success } = await c.env.DB.prepare('DELETE FROM quotes WHERE id = ?').bind(id).run()
+    
+    if (success) {
+      return c.json({ success: true })
+    }
+    throw new Error('Failed to delete quote')
+  } catch (error) {
+    console.error('Error deleting quote:', error)
+    return c.json({ error: 'Failed to delete quote' }, 500)
+  }
+})
+
+// Get unbilled time entries for customer (for invoice creation)
+app.get('/api/customers/:id/unbilled-time-entries', async (c) => {
+  try {
+    const customerId = c.req.param('id')
+    const { results } = await c.env.DB.prepare(`
+      SELECT te.*, p.name as project_name
+      FROM time_entries te
+      LEFT JOIN projects p ON te.project_id = p.id
+      WHERE te.customer_id = ? AND te.is_billable = 1 AND te.is_billed = 0
+      ORDER BY te.start_time DESC
+    `).bind(customerId).all()
+    
+    return c.json({ timeEntries: results })
+  } catch (error) {
+    console.error('Error fetching unbilled time entries:', error)
+    return c.json({ error: 'Failed to fetch unbilled time entries' }, 500)
+  }
+})
+
 // Initialize database tables
 app.get('/api/init-db', async (c) => {
   try {
@@ -577,13 +1061,35 @@ app.get('/', (c) => {
             <div id="invoices" class="tab-content hidden">
                 <div class="flex justify-between items-center mb-6">
                     <h2 class="text-2xl font-bold text-gray-900">Rechnungen</h2>
-                    <button onclick="showInvoiceModal()" class="bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-lg">
-                        <i class="fas fa-plus mr-2"></i>Neue Rechnung
-                    </button>
+                    <div class="space-x-2">
+                        <button onclick="showCreateInvoiceFromTimeModal()" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg">
+                            <i class="fas fa-clock mr-2"></i>Aus Zeiteinträgen
+                        </button>
+                        <button onclick="showInvoiceModal()" class="bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-lg">
+                            <i class="fas fa-plus mr-2"></i>Neue Rechnung
+                        </button>
+                    </div>
                 </div>
                 
-                <div class="bg-white rounded-lg shadow p-6">
-                    <p class="text-gray-500 text-center py-8">Rechnungsmodul wird implementiert...</p>
+                <div class="bg-white shadow rounded-lg">
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Nummer</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Kunde</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Datum</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Fällig</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Betrag</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Aktionen</th>
+                                </tr>
+                            </thead>
+                            <tbody id="invoices-table" class="bg-white divide-y divide-gray-200">
+                                <!-- Will be populated by JavaScript -->
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
 
@@ -596,8 +1102,24 @@ app.get('/', (c) => {
                     </button>
                 </div>
                 
-                <div class="bg-white rounded-lg shadow p-6">
-                    <p class="text-gray-500 text-center py-8">Angebotsmodul wird implementiert...</p>
+                <div class="bg-white shadow rounded-lg">
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Nummer</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Kunde</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Datum</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Gültig bis</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Betrag</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Aktionen</th>
+                                </tr>
+                            </thead>
+                            <tbody id="quotes-table" class="bg-white divide-y divide-gray-200">
+                                <!-- Will be populated by JavaScript --></tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
         </main>

@@ -49,6 +49,12 @@ function showTab(tabName) {
         case 'projects':
             loadProjects();
             break;
+        case 'invoices':
+            loadInvoices();
+            break;
+        case 'quotes':
+            loadQuotes();
+            break;
     }
 }
 
@@ -918,13 +924,732 @@ function showNotification(message, type = 'info') {
     }, 3000);
 }
 
-// Placeholder functions for future implementation
-function showInvoiceModal() {
-    showNotification('Rechnungsmodul wird bald implementiert', 'info');
+// Global state for invoices and quotes
+let currentInvoices = [];
+let currentQuotes = [];
+
+// Invoice management
+async function loadInvoices() {
+    try {
+        const response = await axios.get('/api/invoices');
+        currentInvoices = response.data.invoices || [];
+        renderInvoicesTable();
+    } catch (error) {
+        console.error('Error loading invoices:', error);
+        currentInvoices = [];
+    }
 }
 
-function showQuoteModal() {
-    showNotification('Angebotsmodul wird bald implementiert', 'info');
+function renderInvoicesTable() {
+    const tableBody = document.getElementById('invoices-table');
+    if (!tableBody) return;
+    
+    if (currentInvoices.length === 0) {
+        tableBody.innerHTML = `
+            <tr>
+                <td colspan="7" class="px-6 py-4 text-center text-gray-500">
+                    Keine Rechnungen vorhanden. <a href="#" onclick="showInvoiceModal()" class="text-orange-600 hover:text-orange-800">Erste Rechnung erstellen</a>
+                </td>
+            </tr>
+        `;
+        return;
+    }
+    
+    tableBody.innerHTML = currentInvoices.map(invoice => `
+        <tr class="hover:bg-gray-50">
+            <td class="px-6 py-4 whitespace-nowrap">
+                <div class="text-sm font-medium text-gray-900">${invoice.invoice_number}</div>
+            </td>
+            <td class="px-6 py-4 whitespace-nowrap">
+                <div class="text-sm text-gray-900">${invoice.company_name || 'Unbekannt'}</div>
+            </td>
+            <td class="px-6 py-4 whitespace-nowrap">
+                <div class="text-sm text-gray-900">${new Date(invoice.issue_date).toLocaleDateString('de-CH')}</div>
+            </td>
+            <td class="px-6 py-4 whitespace-nowrap">
+                <div class="text-sm text-gray-900">${invoice.due_date ? new Date(invoice.due_date).toLocaleDateString('de-CH') : '-'}</div>
+            </td>
+            <td class="px-6 py-4 whitespace-nowrap">
+                <div class="text-sm font-medium text-gray-900">${formatCurrency(invoice.total_amount)}</div>
+            </td>
+            <td class="px-6 py-4 whitespace-nowrap">
+                <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${getInvoiceStatusColor(invoice.status)}">
+                    ${getInvoiceStatusText(invoice.status)}
+                </span>
+            </td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
+                <button onclick="viewInvoice(${invoice.id})" class="text-blue-600 hover:text-blue-900" title="Anzeigen">
+                    <i class="fas fa-eye"></i>
+                </button>
+                <button onclick="editInvoice(${invoice.id})" class="text-indigo-600 hover:text-indigo-900" title="Bearbeiten">
+                    <i class="fas fa-edit"></i>
+                </button>
+                <button onclick="generateInvoicePDF(${invoice.id})" class="text-green-600 hover:text-green-900" title="PDF">
+                    <i class="fas fa-file-pdf"></i>
+                </button>
+                <button onclick="deleteInvoice(${invoice.id})" class="text-red-600 hover:text-red-900" title="Löschen">
+                    <i class="fas fa-trash"></i>
+                </button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+function getInvoiceStatusColor(status) {
+    switch(status) {
+        case 'draft': return 'bg-gray-100 text-gray-800';
+        case 'sent': return 'bg-blue-100 text-blue-800';
+        case 'paid': return 'bg-green-100 text-green-800';
+        case 'overdue': return 'bg-red-100 text-red-800';
+        case 'cancelled': return 'bg-yellow-100 text-yellow-800';
+        default: return 'bg-gray-100 text-gray-800';
+    }
+}
+
+function getInvoiceStatusText(status) {
+    switch(status) {
+        case 'draft': return 'Entwurf';
+        case 'sent': return 'Versendet';
+        case 'paid': return 'Bezahlt';
+        case 'overdue': return 'Überfällig';
+        case 'cancelled': return 'Storniert';
+        default: return 'Unbekannt';
+    }
+}
+
+function showInvoiceModal(invoiceId = null) {
+    const invoice = invoiceId ? currentInvoices.find(i => i.id === invoiceId) : null;
+    const isEdit = !!invoice;
+    
+    const customerOptions = currentCustomers.map(customer => 
+        `<option value="${customer.id}" ${invoice?.customer_id === customer.id ? 'selected' : ''}>${customer.company_name}</option>`
+    ).join('');
+    
+    const modalHtml = `
+        <div class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50" id="invoice-modal">
+            <div class="relative top-10 mx-auto p-5 border max-w-4xl shadow-lg rounded-md bg-white">
+                <div class="mt-3">
+                    <h3 class="text-lg font-medium text-gray-900 mb-4">
+                        <i class="fas fa-file-invoice text-orange-600 mr-2"></i>
+                        ${isEdit ? 'Rechnung bearbeiten' : 'Neue Rechnung'}
+                    </h3>
+                    <form id="invoice-form">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div class="space-y-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700">Kunde *</label>
+                                    <select id="invoice_customer_id" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md">
+                                        <option value="">Kunde auswählen</option>
+                                        ${customerOptions}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700">Rechnungsdatum</label>
+                                    <input type="date" id="invoice_issue_date" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" 
+                                           value="${invoice?.issue_date || new Date().toISOString().split('T')[0]}">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700">Fälligkeitsdatum</label>
+                                    <input type="date" id="invoice_due_date" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" 
+                                           value="${invoice?.due_date || ''}">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700">Status</label>
+                                    <select id="invoice_status" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md">
+                                        <option value="draft" ${invoice?.status === 'draft' ? 'selected' : ''}>Entwurf</option>
+                                        <option value="sent" ${invoice?.status === 'sent' ? 'selected' : ''}>Versendet</option>
+                                        <option value="paid" ${invoice?.status === 'paid' ? 'selected' : ''}>Bezahlt</option>
+                                        <option value="overdue" ${invoice?.status === 'overdue' ? 'selected' : ''}>Überfällig</option>
+                                        <option value="cancelled" ${invoice?.status === 'cancelled' ? 'selected' : ''}>Storniert</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="space-y-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700">MwSt.-Satz (%)</label>
+                                    <input type="number" id="invoice_tax_rate" step="0.1" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" 
+                                           value="${invoice?.tax_rate || 8.1}">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700">Zahlungsbedingungen</label>
+                                    <input type="text" id="invoice_payment_terms" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" 
+                                           value="${invoice?.payment_terms || '30 Tage'}" placeholder="z.B. 30 Tage">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700">Notizen</label>
+                                    <textarea id="invoice_notes" rows="4" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" 
+                                              placeholder="Zusätzliche Notizen...">${invoice?.notes || ''}</textarea>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="mt-6">
+                            <div class="flex justify-between items-center mb-4">
+                                <h4 class="text-md font-medium text-gray-900">Rechnungsposten</h4>
+                                <button type="button" onclick="addInvoiceItem()" class="bg-blue-500 hover:bg-blue-600 text-white px-3 py-1 rounded text-sm">
+                                    <i class="fas fa-plus mr-1"></i>Position hinzufügen
+                                </button>
+                            </div>
+                            <div id="invoice-items" class="space-y-3">
+                                <!-- Invoice items will be added here -->
+                            </div>
+                        </div>
+                        
+                        <div class="mt-6 p-4 bg-gray-50 rounded-md">
+                            <div class="text-right space-y-2">
+                                <div class="flex justify-between">
+                                    <span>Zwischensumme:</span>
+                                    <span id="invoice-subtotal" class="font-medium">0.00 CHF</span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span>MwSt.:</span>
+                                    <span id="invoice-tax" class="font-medium">0.00 CHF</span>
+                                </div>
+                                <div class="flex justify-between text-lg font-bold border-t pt-2">
+                                    <span>Gesamtbetrag:</span>
+                                    <span id="invoice-total">0.00 CHF</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="flex justify-end space-x-3 mt-6">
+                            <button type="button" onclick="closeModal('invoice-modal')" class="px-4 py-2 bg-gray-300 text-gray-700 rounded-md hover:bg-gray-400">
+                                Abbrechen
+                            </button>
+                            <button type="submit" class="px-4 py-2 bg-orange-600 text-white rounded-md hover:bg-orange-700">
+                                ${isEdit ? 'Aktualisieren' : 'Erstellen'}
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    document.getElementById('modal-container').innerHTML = modalHtml;
+    
+    // Add initial item if creating new invoice
+    if (!isEdit) {
+        addInvoiceItem();
+    }
+    
+    document.getElementById('invoice-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        await saveInvoice(invoiceId);
+    });
+}
+
+function addInvoiceItem() {
+    const itemsContainer = document.getElementById('invoice-items');
+    const itemId = Date.now();
+    
+    const itemHtml = `
+        <div class="invoice-item grid grid-cols-12 gap-2 items-end" data-item-id="${itemId}">
+            <div class="col-span-5">
+                <label class="block text-xs text-gray-500">Beschreibung</label>
+                <input type="text" class="item-description w-full px-2 py-1 border border-gray-300 rounded text-sm" placeholder="Leistung/Artikel">
+            </div>
+            <div class="col-span-2">
+                <label class="block text-xs text-gray-500">Menge</label>
+                <input type="number" class="item-quantity w-full px-2 py-1 border border-gray-300 rounded text-sm" value="1" step="0.01">
+            </div>
+            <div class="col-span-2">
+                <label class="block text-xs text-gray-500">Einzelpreis</label>
+                <input type="number" class="item-unit-price w-full px-2 py-1 border border-gray-300 rounded text-sm" value="0" step="0.01">
+            </div>
+            <div class="col-span-2">
+                <label class="block text-xs text-gray-500">Summe</label>
+                <input type="number" class="item-total w-full px-2 py-1 border border-gray-300 rounded text-sm bg-gray-100" readonly>
+            </div>
+            <div class="col-span-1">
+                <button type="button" onclick="removeInvoiceItem(${itemId})" class="text-red-600 hover:text-red-800 p-1">
+                    <i class="fas fa-trash text-xs"></i>
+                </button>
+            </div>
+        </div>
+    `;
+    
+    itemsContainer.insertAdjacentHTML('beforeend', itemHtml);
+    
+    // Add event listeners for calculation
+    const item = itemsContainer.querySelector(`[data-item-id="${itemId}"]`);
+    const quantityInput = item.querySelector('.item-quantity');
+    const priceInput = item.querySelector('.item-unit-price');
+    
+    [quantityInput, priceInput].forEach(input => {
+        input.addEventListener('input', calculateInvoiceTotals);
+    });
+    
+    calculateInvoiceTotals();
+}
+
+function removeInvoiceItem(itemId) {
+    document.querySelector(`[data-item-id="${itemId}"]`).remove();
+    calculateInvoiceTotals();
+}
+
+function calculateInvoiceTotals() {
+    const items = document.querySelectorAll('.invoice-item');
+    let subtotal = 0;
+    
+    items.forEach(item => {
+        const quantity = parseFloat(item.querySelector('.item-quantity').value) || 0;
+        const unitPrice = parseFloat(item.querySelector('.item-unit-price').value) || 0;
+        const total = quantity * unitPrice;
+        
+        item.querySelector('.item-total').value = total.toFixed(2);
+        subtotal += total;
+    });
+    
+    const taxRate = parseFloat(document.getElementById('invoice_tax_rate').value) || 0;
+    const taxAmount = subtotal * (taxRate / 100);
+    const totalAmount = subtotal + taxAmount;
+    
+    document.getElementById('invoice-subtotal').textContent = formatCurrency(subtotal);
+    document.getElementById('invoice-tax').textContent = formatCurrency(taxAmount);
+    document.getElementById('invoice-total').textContent = formatCurrency(totalAmount);
+}
+
+async function saveInvoice(invoiceId = null) {
+    const items = [];
+    document.querySelectorAll('.invoice-item').forEach(item => {
+        const description = item.querySelector('.item-description').value;
+        const quantity = parseFloat(item.querySelector('.item-quantity').value) || 0;
+        const unitPrice = parseFloat(item.querySelector('.item-unit-price').value) || 0;
+        const total = quantity * unitPrice;
+        
+        if (description && quantity > 0) {
+            items.push({ description, quantity, unit_price: unitPrice, total });
+        }
+    });
+    
+    const subtotal = items.reduce((sum, item) => sum + item.total, 0);
+    const taxRate = parseFloat(document.getElementById('invoice_tax_rate').value) || 0;
+    const taxAmount = subtotal * (taxRate / 100);
+    const totalAmount = subtotal + taxAmount;
+    
+    const formData = {
+        customer_id: parseInt(document.getElementById('invoice_customer_id').value),
+        issue_date: document.getElementById('invoice_issue_date').value,
+        due_date: document.getElementById('invoice_due_date').value || null,
+        status: document.getElementById('invoice_status').value,
+        payment_terms: document.getElementById('invoice_payment_terms').value,
+        notes: document.getElementById('invoice_notes').value,
+        tax_rate: taxRate,
+        subtotal: subtotal,
+        tax_amount: taxAmount,
+        total_amount: totalAmount,
+        items: items
+    };
+    
+    try {
+        if (invoiceId) {
+            await axios.put(`/api/invoices/${invoiceId}`, formData);
+        } else {
+            await axios.post('/api/invoices', formData);
+        }
+        
+        closeModal('invoice-modal');
+        await loadInvoices();
+        showNotification('Rechnung erfolgreich gespeichert!', 'success');
+    } catch (error) {
+        console.error('Error saving invoice:', error);
+        showNotification('Fehler beim Speichern der Rechnung', 'error');
+    }
+}
+
+function editInvoice(id) {
+    showInvoiceModal(id);
+}
+
+async function deleteInvoice(id) {
+    if (!confirm('Sind Sie sicher, dass Sie diese Rechnung löschen möchten?')) {
+        return;
+    }
+    
+    try {
+        await axios.delete(`/api/invoices/${id}`);
+        await loadInvoices();
+        showNotification('Rechnung erfolgreich gelöscht!', 'success');
+    } catch (error) {
+        console.error('Error deleting invoice:', error);
+        showNotification('Fehler beim Löschen der Rechnung', 'error');
+    }
+}
+
+// Create invoice from time entries
+function showCreateInvoiceFromTimeModal() {
+    if (currentCustomers.length === 0) {
+        showNotification('Bitte erst Kunden anlegen', 'error');
+        return;
+    }
+    
+    const customerOptions = currentCustomers.map(customer => 
+        `<option value="${customer.id}">${customer.company_name}</option>`
+    ).join('');
+    
+    const modalHtml = `
+        <div class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50" id="invoice-from-time-modal">
+            <div class="relative top-10 mx-auto p-5 border max-w-3xl shadow-lg rounded-md bg-white">
+                <div class="mt-3">
+                    <h3 class="text-lg font-medium text-gray-900 mb-4">
+                        <i class="fas fa-clock text-green-600 mr-2"></i>
+                        Rechnung aus Zeiteinträgen erstellen
+                    </h3>
+                    <form id="invoice-from-time-form">
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Kunde auswählen *</label>
+                                <select id="time_invoice_customer_id" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md">
+                                    <option value="">Kunde auswählen</option>
+                                    ${customerOptions}
+                                </select>
+                            </div>
+                            
+                            <div id="unbilled-time-entries" class="hidden">
+                                <label class="block text-sm font-medium text-gray-700 mb-2">Nicht abgerechnete Zeiteinträge:</label>
+                                <div class="max-h-60 overflow-y-auto border border-gray-200 rounded">
+                                    <div id="time-entries-list" class="divide-y divide-gray-200">
+                                        <!-- Time entries will be loaded here -->
+                                    </div>
+                                </div>
+                                <div class="mt-2 text-right">
+                                    <button type="button" onclick="selectAllTimeEntries()" class="text-blue-600 hover:text-blue-800 text-sm mr-4">Alle auswählen</button>
+                                    <button type="button" onclick="deselectAllTimeEntries()" class="text-gray-600 hover:text-gray-800 text-sm">Alle abwählen</button>
+                                </div>
+                            </div>
+                            
+                            <div class="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700">Rechnungsdatum</label>
+                                    <input type="date" id="time_invoice_issue_date" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" 
+                                           value="${new Date().toISOString().split('T')[0]}">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700">Fälligkeitsdatum</label>
+                                    <input type="date" id="time_invoice_due_date" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md">
+                                </div>
+                            </div>
+                            
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Zahlungsbedingungen</label>
+                                <input type="text" id="time_invoice_payment_terms" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" 
+                                       value="30 Tage" placeholder="z.B. 30 Tage">
+                            </div>
+                            
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Notizen</label>
+                                <textarea id="time_invoice_notes" rows="3" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" 
+                                          placeholder="Zusätzliche Notizen zur Rechnung..."></textarea>
+                            </div>
+                            
+                            <div id="invoice-preview" class="hidden p-4 bg-blue-50 rounded-md">
+                                <h4 class="font-medium text-blue-900 mb-2">Rechnungsvorschau:</h4>
+                                <div class="text-sm text-blue-800">
+                                    <div class="flex justify-between"><span>Positionen:</span><span id="preview-items">0</span></div>
+                                    <div class="flex justify-between"><span>Gesamtstunden:</span><span id="preview-hours">0.0</span></div>
+                                    <div class="flex justify-between"><span>Zwischensumme:</span><span id="preview-subtotal">0.00 CHF</span></div>
+                                    <div class="flex justify-between"><span>MwSt. (8.1%):</span><span id="preview-tax">0.00 CHF</span></div>
+                                    <div class="flex justify-between font-bold border-t pt-2 mt-2"><span>Gesamtbetrag:</span><span id="preview-total">0.00 CHF</span></div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="flex justify-end space-x-3 mt-6">
+                            <button type="button" onclick="closeModal('invoice-from-time-modal')" class="px-4 py-2 bg-gray-300 text-gray-700 rounded-md hover:bg-gray-400">
+                                Abbrechen
+                            </button>
+                            <button type="submit" class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700">
+                                <i class="fas fa-file-invoice mr-1"></i>Rechnung erstellen
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    document.getElementById('modal-container').innerHTML = modalHtml;
+    
+    // Load time entries when customer changes
+    document.getElementById('time_invoice_customer_id').addEventListener('change', async function() {
+        const customerId = this.value;
+        if (customerId) {
+            await loadUnbilledTimeEntries(customerId);
+        } else {
+            document.getElementById('unbilled-time-entries').classList.add('hidden');
+        }
+    });
+    
+    document.getElementById('invoice-from-time-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        await createInvoiceFromTimeEntries();
+    });
+}
+
+async function loadUnbilledTimeEntries(customerId) {
+    try {
+        const response = await axios.get(`/api/customers/${customerId}/unbilled-time-entries`);
+        const timeEntries = response.data.timeEntries || [];
+        
+        const container = document.getElementById('time-entries-list');
+        const unbilledSection = document.getElementById('unbilled-time-entries');
+        
+        if (timeEntries.length === 0) {
+            container.innerHTML = `
+                <div class="p-4 text-center text-gray-500">
+                    Keine nicht abgerechneten Zeiteinträge für diesen Kunden gefunden.
+                </div>
+            `;
+            unbilledSection.classList.remove('hidden');
+            return;
+        }
+        
+        container.innerHTML = timeEntries.map(entry => {
+            const hours = (entry.duration_minutes / 60).toFixed(2);
+            const rate = entry.hourly_rate || 0;
+            const total = (entry.duration_minutes / 60) * rate;
+            
+            return `
+                <label class="flex items-center p-3 hover:bg-gray-50 cursor-pointer">
+                    <input type="checkbox" class="time-entry-checkbox mr-3" value="${entry.id}" data-hours="${hours}" data-rate="${rate}" data-total="${total}">
+                    <div class="flex-1">
+                        <div class="flex justify-between items-start">
+                            <div>
+                                <div class="font-medium text-gray-900">${entry.description}</div>
+                                <div class="text-sm text-gray-500">
+                                    ${new Date(entry.start_time).toLocaleDateString('de-CH')} | 
+                                    ${entry.project_name || 'Kein Projekt'} | 
+                                    ${hours}h à ${formatCurrency(rate)}
+                                </div>
+                            </div>
+                            <div class="text-right">
+                                <div class="font-medium text-gray-900">${formatCurrency(total)}</div>
+                            </div>
+                        </div>
+                    </div>
+                </label>
+            `;
+        }).join('');
+        
+        // Add event listeners for preview calculation
+        container.querySelectorAll('.time-entry-checkbox').forEach(checkbox => {
+            checkbox.addEventListener('change', updateInvoicePreview);
+        });
+        
+        unbilledSection.classList.remove('hidden');
+        updateInvoicePreview();
+        
+    } catch (error) {
+        console.error('Error loading unbilled time entries:', error);
+        showNotification('Fehler beim Laden der Zeiteinträge', 'error');
+    }
+}
+
+function selectAllTimeEntries() {
+    document.querySelectorAll('.time-entry-checkbox').forEach(checkbox => {
+        checkbox.checked = true;
+    });
+    updateInvoicePreview();
+}
+
+function deselectAllTimeEntries() {
+    document.querySelectorAll('.time-entry-checkbox').forEach(checkbox => {
+        checkbox.checked = false;
+    });
+    updateInvoicePreview();
+}
+
+function updateInvoicePreview() {
+    const checkedBoxes = document.querySelectorAll('.time-entry-checkbox:checked');
+    let totalHours = 0;
+    let subtotal = 0;
+    
+    checkedBoxes.forEach(checkbox => {
+        totalHours += parseFloat(checkbox.dataset.hours);
+        subtotal += parseFloat(checkbox.dataset.total);
+    });
+    
+    const taxAmount = subtotal * 0.081; // 8.1% MwSt
+    const total = subtotal + taxAmount;
+    
+    document.getElementById('preview-items').textContent = checkedBoxes.length;
+    document.getElementById('preview-hours').textContent = totalHours.toFixed(1) + 'h';
+    document.getElementById('preview-subtotal').textContent = formatCurrency(subtotal);
+    document.getElementById('preview-tax').textContent = formatCurrency(taxAmount);
+    document.getElementById('preview-total').textContent = formatCurrency(total);
+    
+    const previewDiv = document.getElementById('invoice-preview');
+    if (checkedBoxes.length > 0) {
+        previewDiv.classList.remove('hidden');
+    } else {
+        previewDiv.classList.add('hidden');
+    }
+}
+
+async function createInvoiceFromTimeEntries() {
+    const customerId = document.getElementById('time_invoice_customer_id').value;
+    const checkedBoxes = document.querySelectorAll('.time-entry-checkbox:checked');
+    const timeEntryIds = Array.from(checkedBoxes).map(cb => parseInt(cb.value));
+    
+    if (!customerId || timeEntryIds.length === 0) {
+        showNotification('Bitte Kunde auswählen und mindestens einen Zeiteintrag markieren', 'error');
+        return;
+    }
+    
+    const formData = {
+        customer_id: parseInt(customerId),
+        time_entry_ids: timeEntryIds,
+        issue_date: document.getElementById('time_invoice_issue_date').value,
+        due_date: document.getElementById('time_invoice_due_date').value || null,
+        payment_terms: document.getElementById('time_invoice_payment_terms').value,
+        notes: document.getElementById('time_invoice_notes').value
+    };
+    
+    try {
+        const response = await axios.post('/api/invoices/from-time-entries', formData);
+        
+        closeModal('invoice-from-time-modal');
+        await loadInvoices();
+        await loadTimeEntries(); // Refresh to show updated billed status
+        
+        showNotification(
+            `Rechnung ${response.data.invoice_number} erfolgreich erstellt! (${response.data.items_count} Positionen, ${formatCurrency(response.data.total_amount)})`, 
+            'success'
+        );
+    } catch (error) {
+        console.error('Error creating invoice from time entries:', error);
+        showNotification('Fehler beim Erstellen der Rechnung', 'error');
+    }
+}
+
+// Quote management (basic implementation)
+async function loadQuotes() {
+    try {
+        const response = await axios.get('/api/quotes');
+        currentQuotes = response.data.quotes || [];
+        renderQuotesTable();
+    } catch (error) {
+        console.error('Error loading quotes:', error);
+        currentQuotes = [];
+    }
+}
+
+function renderQuotesTable() {
+    const tableBody = document.getElementById('quotes-table');
+    if (!tableBody) return;
+    
+    if (currentQuotes.length === 0) {
+        tableBody.innerHTML = `
+            <tr>
+                <td colspan="7" class="px-6 py-4 text-center text-gray-500">
+                    Keine Angebote vorhanden. <a href="#" onclick="showQuoteModal()" class="text-yellow-600 hover:text-yellow-800">Erstes Angebot erstellen</a>
+                </td>
+            </tr>
+        `;
+        return;
+    }
+    
+    tableBody.innerHTML = currentQuotes.map(quote => `
+        <tr class="hover:bg-gray-50">
+            <td class="px-6 py-4 whitespace-nowrap">
+                <div class="text-sm font-medium text-gray-900">${quote.quote_number}</div>
+            </td>
+            <td class="px-6 py-4 whitespace-nowrap">
+                <div class="text-sm text-gray-900">${quote.company_name || 'Unbekannt'}</div>
+            </td>
+            <td class="px-6 py-4 whitespace-nowrap">
+                <div class="text-sm text-gray-900">${new Date(quote.issue_date).toLocaleDateString('de-CH')}</div>
+            </td>
+            <td class="px-6 py-4 whitespace-nowrap">
+                <div class="text-sm text-gray-900">${quote.valid_until ? new Date(quote.valid_until).toLocaleDateString('de-CH') : '-'}</div>
+            </td>
+            <td class="px-6 py-4 whitespace-nowrap">
+                <div class="text-sm font-medium text-gray-900">${formatCurrency(quote.total_amount)}</div>
+            </td>
+            <td class="px-6 py-4 whitespace-nowrap">
+                <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${getQuoteStatusColor(quote.status)}">
+                    ${getQuoteStatusText(quote.status)}
+                </span>
+            </td>
+            <td class="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
+                <button onclick="viewQuote(${quote.id})" class="text-blue-600 hover:text-blue-900" title="Anzeigen">
+                    <i class="fas fa-eye"></i>
+                </button>
+                <button onclick="editQuote(${quote.id})" class="text-indigo-600 hover:text-indigo-900" title="Bearbeiten">
+                    <i class="fas fa-edit"></i>
+                </button>
+                <button onclick="generateQuotePDF(${quote.id})" class="text-green-600 hover:text-green-900" title="PDF">
+                    <i class="fas fa-file-pdf"></i>
+                </button>
+                <button onclick="deleteQuote(${quote.id})" class="text-red-600 hover:text-red-900" title="Löschen">
+                    <i class="fas fa-trash"></i>
+                </button>
+            </td>
+        </tr>
+    `).join('');
+}
+
+function getQuoteStatusColor(status) {
+    switch(status) {
+        case 'draft': return 'bg-gray-100 text-gray-800';
+        case 'sent': return 'bg-blue-100 text-blue-800';
+        case 'accepted': return 'bg-green-100 text-green-800';
+        case 'rejected': return 'bg-red-100 text-red-800';
+        case 'expired': return 'bg-yellow-100 text-yellow-800';
+        default: return 'bg-gray-100 text-gray-800';
+    }
+}
+
+function getQuoteStatusText(status) {
+    switch(status) {
+        case 'draft': return 'Entwurf';
+        case 'sent': return 'Versendet';
+        case 'accepted': return 'Angenommen';
+        case 'rejected': return 'Abgelehnt';
+        case 'expired': return 'Abgelaufen';
+        default: return 'Unbekannt';
+    }
+}
+
+function showQuoteModal(quoteId = null) {
+    showNotification('Vollständiges Angebotsmodul wird in der nächsten Version implementiert', 'info');
+}
+
+// Placeholder functions for PDF generation and viewing
+function generateInvoicePDF(id) {
+    showNotification('PDF-Export wird implementiert - Vollständige Funktionalität kommt bald!', 'info');
+}
+
+function generateQuotePDF(id) {
+    showNotification('PDF-Export wird implementiert - Vollständige Funktionalität kommt bald!', 'info');
+}
+
+function viewInvoice(id) {
+    showNotification('Anzeige-Funktion wird implementiert', 'info');
+}
+
+function viewQuote(id) {
+    showNotification('Anzeige-Funktion wird implementiert', 'info');
+}
+
+function editQuote(id) {
+    showNotification('Angebots-Bearbeitung wird in der nächsten Version implementiert', 'info');
+}
+
+async function deleteQuote(id) {
+    if (!confirm('Sind Sie sicher, dass Sie dieses Angebot löschen möchten?')) {
+        return;
+    }
+    
+    try {
+        await axios.delete(`/api/quotes/${id}`);
+        await loadQuotes();
+        showNotification('Angebot erfolgreich gelöscht!', 'success');
+    } catch (error) {
+        console.error('Error deleting quote:', error);
+        showNotification('Fehler beim Löschen des Angebots', 'error');
+    }
 }
 
 function editTimeEntry(id) {
