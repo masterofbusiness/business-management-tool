@@ -241,8 +241,14 @@ app.post('/api/projects', async (c) => {
       INSERT INTO projects (customer_id, name, description, hourly_rate, budget, status, start_date, end_date)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
-      data.customer_id, data.name, data.description, data.hourly_rate,
-      data.budget, data.status || 'active', data.start_date, data.end_date
+      data.customer_id || null,
+      data.name || '',
+      data.description || null,
+      data.hourly_rate || null,
+      data.budget || null,
+      data.status || 'active',
+      data.start_date || null,
+      data.end_date || null
     ).run()
 
     if (success) {
@@ -252,6 +258,53 @@ app.post('/api/projects', async (c) => {
   } catch (error) {
     console.error('Error creating project:', error)
     return c.json({ error: 'Failed to create project' }, 500)
+  }
+})
+
+app.put('/api/projects/:id', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const data = await c.req.json()
+    
+    const { success } = await c.env.DB.prepare(`
+      UPDATE projects SET 
+        customer_id = ?, name = ?, description = ?, hourly_rate = ?, 
+        budget = ?, status = ?, start_date = ?, end_date = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(
+      data.customer_id || null,
+      data.name || '',
+      data.description || null,
+      data.hourly_rate || null,
+      data.budget || null,
+      data.status || 'active',
+      data.start_date || null,
+      data.end_date || null,
+      id
+    ).run()
+
+    if (success) {
+      return c.json({ id, ...data })
+    }
+    throw new Error('Failed to update project')
+  } catch (error) {
+    console.error('Error updating project:', error)
+    return c.json({ error: 'Failed to update project' }, 500)
+  }
+})
+
+app.delete('/api/projects/:id', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const { success } = await c.env.DB.prepare('DELETE FROM projects WHERE id = ?').bind(id).run()
+    
+    if (success) {
+      return c.json({ success: true })
+    }
+    throw new Error('Failed to delete project')
+  } catch (error) {
+    console.error('Error deleting project:', error)
+    return c.json({ error: 'Failed to delete project' }, 500)
   }
 })
 

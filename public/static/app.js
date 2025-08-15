@@ -801,32 +801,32 @@ function showProjectModal(projectId = null) {
                         <div class="space-y-4">
                             <div>
                                 <label class="block text-sm font-medium text-gray-700">Kunde *</label>
-                                <select id="customer_id" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md">
+                                <select id="project_customer_id" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md">
                                     <option value="">Kunde auswählen</option>
                                     ${customerOptions}
                                 </select>
                             </div>
                             <div>
                                 <label class="block text-sm font-medium text-gray-700">Projektname *</label>
-                                <input type="text" id="name" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" value="${project?.name || ''}">
+                                <input type="text" id="project_name" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" value="${project?.name || ''}">
                             </div>
                             <div>
                                 <label class="block text-sm font-medium text-gray-700">Beschreibung</label>
-                                <textarea id="description" rows="3" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md">${project?.description || ''}</textarea>
+                                <textarea id="project_description" rows="3" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md">${project?.description || ''}</textarea>
                             </div>
                             <div class="grid grid-cols-2 gap-4">
                                 <div>
                                     <label class="block text-sm font-medium text-gray-700">Budget (CHF)</label>
-                                    <input type="number" id="budget" step="0.01" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" value="${project?.budget || ''}">
+                                    <input type="number" id="project_budget" step="0.01" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" value="${project?.budget || ''}">
                                 </div>
                                 <div>
                                     <label class="block text-sm font-medium text-gray-700">Stundensatz (CHF)</label>
-                                    <input type="number" id="hourly_rate" step="0.01" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" value="${project?.hourly_rate || ''}">
+                                    <input type="number" id="project_hourly_rate" step="0.01" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" value="${project?.hourly_rate || ''}">
                                 </div>
                             </div>
                             <div>
                                 <label class="block text-sm font-medium text-gray-700">Status</label>
-                                <select id="status" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md">
+                                <select id="project_status" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md">
                                     <option value="active" ${project?.status === 'active' ? 'selected' : ''}>Aktiv</option>
                                     <option value="completed" ${project?.status === 'completed' ? 'selected' : ''}>Abgeschlossen</option>
                                     <option value="paused" ${project?.status === 'paused' ? 'selected' : ''}>Pausiert</option>
@@ -836,11 +836,11 @@ function showProjectModal(projectId = null) {
                             <div class="grid grid-cols-2 gap-4">
                                 <div>
                                     <label class="block text-sm font-medium text-gray-700">Startdatum</label>
-                                    <input type="date" id="start_date" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" value="${project?.start_date || ''}">
+                                    <input type="date" id="project_start_date" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" value="${project?.start_date || ''}">
                                 </div>
                                 <div>
                                     <label class="block text-sm font-medium text-gray-700">Enddatum</label>
-                                    <input type="date" id="end_date" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" value="${project?.end_date || ''}">
+                                    <input type="date" id="project_end_date" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" value="${project?.end_date || ''}">
                                 </div>
                             </div>
                         </div>
@@ -868,14 +868,14 @@ function showProjectModal(projectId = null) {
 
 async function saveProject(projectId = null) {
     const formData = {
-        customer_id: parseInt(document.getElementById('customer_id').value),
-        name: document.getElementById('name').value,
-        description: document.getElementById('description').value,
-        budget: parseFloat(document.getElementById('budget').value) || null,
-        hourly_rate: parseFloat(document.getElementById('hourly_rate').value) || null,
-        status: document.getElementById('status').value,
-        start_date: document.getElementById('start_date').value || null,
-        end_date: document.getElementById('end_date').value || null
+        customer_id: parseInt(document.getElementById('project_customer_id').value),
+        name: document.getElementById('project_name').value,
+        description: document.getElementById('project_description').value,
+        budget: parseFloat(document.getElementById('project_budget').value) || null,
+        hourly_rate: parseFloat(document.getElementById('project_hourly_rate').value) || null,
+        status: document.getElementById('project_status').value,
+        start_date: document.getElementById('project_start_date').value || null,
+        end_date: document.getElementById('project_end_date').value || null
     };
     
     try {
@@ -956,7 +956,7 @@ async function deleteProject(id) {
     }
     
     try {
-        // await axios.delete(`/api/projects/${id}`);
+        await axios.delete(`/api/projects/${id}`);
         await loadProjects();
         showNotification('Projekt erfolgreich gelöscht!', 'success');
     } catch (error) {
