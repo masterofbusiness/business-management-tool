@@ -1,0 +1,164 @@
+/* Business Management Tool - Custom Styles */
+
+/* Tab styles */
+.active-tab {
+    background-color: #2563eb !important;
+    color: white !important;
+}
+
+.tab {
+    transition: all 0.2s ease-in-out;
+}
+
+.tab:hover {
+    background-color: #d1d5db;
+}
+
+/* Timer display */
+.timer-display {
+    font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+    font-size: 2rem;
+    font-weight: bold;
+}
+
+/* Modal animations */
+.modal-enter {
+    animation: modalEnter 0.3s ease-out;
+}
+
+@keyframes modalEnter {
+    from {
+        opacity: 0;
+        transform: scale(0.9);
+    }
+    to {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+/* Table hover effects */
+.table-hover tr:hover {
+    background-color: #f9fafb;
+}
+
+/* Status badges */
+.status-active { background-color: #d1fae5; color: #065f46; }
+.status-completed { background-color: #dbeafe; color: #1e40af; }
+.status-paused { background-color: #fef3c7; color: #92400e; }
+.status-cancelled { background-color: #fee2e2; color: #991b1b; }
+
+/* Custom scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+    width: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+    background: #f1f1f1;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+    background: #888;
+    border-radius: 3px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: #555;
+}
+
+/* Form improvements */
+.form-input:focus {
+    ring: 2px;
+    ring-color: #3b82f6;
+    border-color: #3b82f6;
+}
+
+/* Dashboard cards */
+.dashboard-card {
+    transition: transform 0.2s ease-in-out;
+}
+
+.dashboard-card:hover {
+    transform: translateY(-2px);
+}
+
+/* Loading animation */
+.loading {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    border: 3px solid #f3f3f3;
+    border-top: 3px solid #3498db;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* Notification styles */
+.notification {
+    animation: slideInRight 0.3s ease-out, slideOutRight 0.3s ease-in 2.7s;
+    animation-fill-mode: both;
+}
+
+@keyframes slideInRight {
+    from {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+@keyframes slideOutRight {
+    from {
+        transform: translateX(0);
+        opacity: 1;
+    }
+    to {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+}
+
+/* Print styles for invoices/quotes */
+@media print {
+    body * {
+        visibility: hidden;
+    }
+    
+    .print-area, .print-area * {
+        visibility: visible;
+    }
+    
+    .print-area {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+    }
+    
+    .no-print {
+        display: none !important;
+    }
+}
+
+/* Responsive improvements */
+@media (max-width: 768px) {
+    .mobile-stack {
+        display: block !important;
+    }
+    
+    .mobile-full-width {
+        width: 100% !important;
+    }
+    
+    .mobile-hide {
+        display: none !important;
+    }
+}
