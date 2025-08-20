@@ -260,7 +260,12 @@ function renderCustomersTable() {
 }
 
 function showCustomerModal(customerId = null) {
+    console.log('DEBUG - showCustomerModal called with ID:', customerId);
+    console.log('DEBUG - currentCustomers array:', currentCustomers);
+    
     const customer = customerId ? currentCustomers.find(c => c.id === customerId) : null;
+    console.log('DEBUG - Found customer for editing:', customer);
+    
     const isEdit = !!customer;
     
     const modalHtml = `
