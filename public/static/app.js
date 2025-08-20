@@ -3113,4 +3113,4 @@ function getAccountingStatusText(status) {
         case 'reconciled': return 'Abgestimmt';
         default: return 'Unbekannt';
     }
-}
+}// Force deployment Wed Aug 20 21:17:43 UTC 2025
