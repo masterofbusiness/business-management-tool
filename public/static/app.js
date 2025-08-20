@@ -184,27 +184,15 @@ async function loadCustomers() {
     }
 }
 
-// Get customer display name for dropdowns (prefer company name)
+// Get customer display name (company name preferred, contact person as fallback)
 function getCustomerDisplayName(customer) {
-    // Use the same logic as table display for consistency
-    return getCompanyName(customer);
-}
-
-// Get company name with fallback for table display
-function getCompanyName(customer) {
     if (customer.company_name && customer.company_name.trim() !== '') {
         return customer.company_name;
     }
-    // Fallback: derive company name from email domain or use contact person  
-    if (customer.email) {
-        const domain = customer.email.split('@')[1];
-        if (domain) {
-            if (domain.includes('gsibergtimepieces')) return 'Gsiberg Timepieces';
-            if (domain.includes('mastercars')) return 'Master Cars';
-            if (domain.includes('bluewin')) return customer.contact_person || 'Privatkunde';
-        }
+    if (customer.contact_person && customer.contact_person.trim() !== '') {
+        return customer.contact_person;
     }
-    return customer.contact_person || 'Unbekannt';
+    return `Kunde #${customer.id}`;
 }
 
 // Update all customer dropdowns in the current page
@@ -246,7 +234,7 @@ function renderCustomersTable() {
     tableBody.innerHTML = currentCustomers.map(customer => `
         <tr class="hover:bg-gray-50">
             <td class="px-6 py-4 whitespace-nowrap">
-                <div class="text-sm font-medium text-gray-900">${getCompanyName(customer)}</div>
+                <div class="text-sm font-medium text-gray-900">${customer.company_name || 'Kein Firmenname'}</div>
                 <div class="text-sm text-gray-500">${customer.city || ''}</div>
             </td>
             <td class="px-6 py-4 whitespace-nowrap">
