@@ -14,6 +14,7 @@ document.addEventListener('DOMContentLoaded', function() {
     setInterval(updateCurrentTime, 1000);
     loadDashboard();
     initializeDatabase();
+    loadCompanySettings();
 });
 
 // Tab management
@@ -54,6 +55,9 @@ function showTab(tabName) {
             break;
         case 'quotes':
             loadQuotes();
+            break;
+        case 'accounting':
+            loadAccountingData();
             break;
     }
 }
@@ -1017,8 +1021,23 @@ function getInvoiceStatusText(status) {
     }
 }
 
-function showInvoiceModal(invoiceId = null) {
-    const invoice = invoiceId ? currentInvoices.find(i => i.id === invoiceId) : null;
+async function showInvoiceModal(invoiceId = null) {
+    let invoice = null;
+    let invoiceItems = [];
+    
+    // Load invoice details if editing
+    if (invoiceId) {
+        try {
+            const response = await axios.get(`/api/invoices/${invoiceId}`);
+            invoice = response.data.invoice;
+            invoiceItems = response.data.items || [];
+        } catch (error) {
+            console.error('Error loading invoice details:', error);
+            showNotification('Fehler beim Laden der Rechnungsdetails', 'error');
+            return;
+        }
+    }
+    
     const isEdit = !!invoice;
     
     const customerOptions = currentCustomers.map(customer => 
@@ -1128,10 +1147,26 @@ function showInvoiceModal(invoiceId = null) {
     
     document.getElementById('modal-container').innerHTML = modalHtml;
     
-    // Add initial item if creating new invoice
-    if (!isEdit) {
-        addInvoiceItem();
-    }
+    // Wait for DOM to be ready, then load items
+    setTimeout(() => {
+        // Load existing items or add initial item
+        if (isEdit && invoiceItems.length > 0) {
+            // Clear container first to be safe
+            const container = document.getElementById('invoice-items');
+            if (container) {
+                container.innerHTML = '';
+            }
+            
+            // Load existing items
+            invoiceItems.forEach((item) => {
+                addInvoiceItem(item);
+            });
+            calculateInvoiceTotals();
+        } else {
+            // Add initial empty item for new invoices
+            addInvoiceItem();
+        }
+    }, 100); // Small delay to ensure DOM is ready
     
     document.getElementById('invoice-form').addEventListener('submit', async (e) => {
         e.preventDefault();
@@ -1139,27 +1174,33 @@ function showInvoiceModal(invoiceId = null) {
     });
 }
 
-function addInvoiceItem() {
+function addInvoiceItem(itemData = null) {
     const itemsContainer = document.getElementById('invoice-items');
-    const itemId = Date.now();
+    const itemId = itemData?.id || Date.now();
+    
+    // Use existing data or defaults
+    const description = itemData?.description || '';
+    const quantity = itemData?.quantity || 1;
+    const unitPrice = itemData?.unit_price || 0;
+    const total = itemData ? (itemData.quantity * itemData.unit_price) : 0;
     
     const itemHtml = `
         <div class="invoice-item grid grid-cols-12 gap-2 items-end" data-item-id="${itemId}">
             <div class="col-span-5">
                 <label class="block text-xs text-gray-500">Beschreibung</label>
-                <input type="text" class="item-description w-full px-2 py-1 border border-gray-300 rounded text-sm" placeholder="Leistung/Artikel">
+                <input type="text" class="item-description w-full px-2 py-1 border border-gray-300 rounded text-sm" placeholder="Leistung/Artikel" value="${description}">
             </div>
             <div class="col-span-2">
                 <label class="block text-xs text-gray-500">Menge</label>
-                <input type="number" class="item-quantity w-full px-2 py-1 border border-gray-300 rounded text-sm" value="1" step="0.01">
+                <input type="number" class="item-quantity w-full px-2 py-1 border border-gray-300 rounded text-sm" value="${quantity}" step="0.01">
             </div>
             <div class="col-span-2">
                 <label class="block text-xs text-gray-500">Einzelpreis</label>
-                <input type="number" class="item-unit-price w-full px-2 py-1 border border-gray-300 rounded text-sm" value="0" step="0.01">
+                <input type="number" class="item-unit-price w-full px-2 py-1 border border-gray-300 rounded text-sm" value="${unitPrice}" step="0.01">
             </div>
             <div class="col-span-2">
                 <label class="block text-xs text-gray-500">Summe</label>
-                <input type="number" class="item-total w-full px-2 py-1 border border-gray-300 rounded text-sm bg-gray-100" readonly>
+                <input type="number" class="item-total w-full px-2 py-1 border border-gray-300 rounded text-sm bg-gray-100" readonly value="${total.toFixed(2)}">
             </div>
             <div class="col-span-1">
                 <button type="button" onclick="removeInvoiceItem(${itemId})" class="text-red-600 hover:text-red-800 p-1">
@@ -1262,6 +1303,213 @@ function editInvoice(id) {
     showInvoiceModal(id);
 }
 
+async function viewInvoice(id) {
+    try {
+        const response = await axios.get(`/api/invoices/${id}`);
+        const invoice = response.data.invoice;
+        const items = response.data.items || [];
+        
+        // Load company settings for professional preview
+        await loadCompanySettings();
+        showInvoicePreviewModal(invoice, items);
+    } catch (error) {
+        console.error('Error loading invoice for preview:', error);
+        showNotification('Fehler beim Laden der Rechnungsvorschau', 'error');
+    }
+}
+
+function showInvoicePreviewModal(invoice, items) {
+    const subtotal = items.reduce((sum, item) => sum + item.total, 0);
+    const taxAmount = subtotal * (invoice.tax_rate / 100);
+    const totalAmount = subtotal + taxAmount;
+    
+    // Use company settings for professional look
+    const companySettings = currentCompanySettings || {};
+    
+    const modalHtml = `
+        <div class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50" id="invoice-preview-modal">
+            <div class="relative top-5 mx-auto p-4 border max-w-5xl shadow-2xl rounded-lg bg-white" style="min-height: 90vh;">
+                <!-- Modal Header -->
+                <div class="flex justify-between items-center mb-6 pb-4 border-b">
+                    <h3 class="text-xl font-bold text-gray-900">
+                        <i class="fas fa-eye text-blue-600 mr-2"></i>
+                        Rechnungsvorschau - ${invoice.invoice_number}
+                    </h3>
+                    <div class="flex space-x-2">
+                        <button onclick="generateInvoicePDF(${invoice.id})" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg">
+                            <i class="fas fa-file-pdf mr-2"></i>PDF Export
+                        </button>
+                        <button onclick="closeModal('invoice-preview-modal')" class="bg-gray-300 hover:bg-gray-400 text-gray-700 px-4 py-2 rounded-lg">
+                            <i class="fas fa-times mr-2"></i>Schließen
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- Professional Invoice Preview (matches PDF design) -->
+                <div class="bg-white border border-gray-200 rounded-lg overflow-hidden" style="font-family: 'Helvetica', Arial, sans-serif;">
+                    <!-- Compact Header with Logo left and Invoice Number right -->
+                    <div class="flex justify-between items-start p-6 pb-4 border-b border-gray-200">
+                        <div class="flex items-center space-x-4">
+                            ${companySettings.logo_url ? `
+                                <img src="${companySettings.logo_url}" alt="Firmenlogo" class="h-12 max-w-32 object-contain">
+                            ` : ''}
+                            <div>
+                                <h1 class="text-xl font-semibold text-gray-900">RECHNUNG</h1>
+                            </div>
+                        </div>
+                        <div class="text-right">
+                            <p class="text-lg font-bold text-gray-900">${invoice.invoice_number}</p>
+                        </div>
+                    </div>
+                    
+                    <!-- Customer Address Section with Invoice Metadata -->
+                    <div class="p-6 pb-4">
+                        <div class="flex justify-between items-start">
+                            <!-- Customer Address -->
+                            <div class="w-2/3">
+                                <h3 class="text-sm font-semibold mb-3 text-gray-800">Rechnungsadresse:</h3>
+                                <div class="bg-gray-50 p-4 rounded border-l-3 border-blue-500">
+                                    <p class="font-bold text-gray-900 mb-1">${invoice.company_name}</p>
+                                    ${invoice.contact_person ? `<p class="text-gray-700 text-sm mb-1">${invoice.contact_person}</p>` : ''}
+                                    ${invoice.address ? `<p class="text-gray-700 text-sm mb-1">${invoice.address}</p>` : ''}
+                                    ${invoice.postal_code && invoice.city ? `<p class="text-gray-700 text-sm mb-1">${invoice.postal_code} ${invoice.city}</p>` : ''}
+                                    ${invoice.country ? `<p class="text-gray-700 text-sm mb-1">${invoice.country}</p>` : ''}
+                                    ${invoice.email ? `<p class="text-gray-600 text-xs"><strong>E-Mail:</strong> ${invoice.email}</p>` : ''}
+                                </div>
+                            </div>
+                            
+                            <!-- Invoice Metadata (compact) -->
+                            <div class="w-1/3 pl-6">
+                                <div class="bg-gray-50 p-4 rounded text-sm">
+                                    <div class="space-y-2">
+                                        <div class="flex justify-between">
+                                            <span class="text-gray-600">Rechnungsdatum:</span>
+                                            <span class="font-medium">${new Date(invoice.issue_date).toLocaleDateString('de-CH')}</span>
+                                        </div>
+                                        ${invoice.due_date ? `
+                                        <div class="flex justify-between">
+                                            <span class="text-gray-600">Fälligkeitsdatum:</span>
+                                            <span class="font-medium">${new Date(invoice.due_date).toLocaleDateString('de-CH')}</span>
+                                        </div>
+                                        ` : ''}
+                                        <div class="flex justify-between items-center">
+                                            <span class="text-gray-600">Status:</span>
+                                            <span class="px-2 py-1 rounded text-xs ${getInvoiceStatusColor(invoice.status)}">${getInvoiceStatusText(invoice.status)}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Items Table -->
+                    <div class="px-8 pb-6">
+                        <h3 class="text-lg font-semibold mb-4 text-gray-800">Rechnungsposten:</h3>
+                        <table class="w-full border border-gray-300 rounded-lg overflow-hidden">
+                            <thead class="bg-gray-100">
+                                <tr>
+                                    <th class="border-r border-gray-300 px-6 py-4 text-left font-semibold text-gray-700">Beschreibung</th>
+                                    <th class="border-r border-gray-300 px-4 py-4 text-center font-semibold text-gray-700 w-24">Menge</th>
+                                    <th class="border-r border-gray-300 px-4 py-4 text-right font-semibold text-gray-700 w-32">Einzelpreis</th>
+                                    <th class="px-4 py-4 text-right font-semibold text-gray-700 w-32">Summe</th>
+                                </tr>
+                            </thead>
+                            <tbody class="bg-white">
+                                ${items.map((item, index) => `
+                                    <tr class="${index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}">
+                                        <td class="border-r border-gray-200 px-6 py-4 text-gray-800">${item.description}</td>
+                                        <td class="border-r border-gray-200 px-4 py-4 text-center text-gray-800">${item.quantity}</td>
+                                        <td class="border-r border-gray-200 px-4 py-4 text-right text-gray-800">${formatCurrency(item.unit_price)}</td>
+                                        <td class="px-4 py-4 text-right font-semibold text-gray-900">${formatCurrency(item.total)}</td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                    
+                    <!-- Totals Section -->
+                    <div class="px-8 pb-6">
+                        <div class="flex justify-end">
+                            <div class="w-80 bg-gray-50 p-6 rounded-lg border border-gray-200">
+                                <div class="space-y-3">
+                                    <div class="flex justify-between text-gray-700">
+                                        <span>Zwischensumme:</span>
+                                        <span class="font-semibold">${formatCurrency(subtotal)}</span>
+                                    </div>
+                                    <div class="flex justify-between text-gray-700">
+                                        <span>MwSt. (${invoice.tax_rate}%):</span>
+                                        <span class="font-semibold">${formatCurrency(taxAmount)}</span>
+                                    </div>
+                                    <hr class="border-gray-300">
+                                    <div class="flex justify-between text-xl font-bold text-gray-900">
+                                        <span>Gesamtbetrag:</span>
+                                        <span>${formatCurrency(totalAmount)}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Payment Terms & Notes -->
+                    ${(invoice.payment_terms || invoice.notes) ? `
+                    <div class="px-8 pb-6 border-t border-gray-200 pt-6">
+                        ${invoice.payment_terms ? `<p class="text-sm text-gray-600 mb-3"><strong>Zahlungsbedingungen:</strong> ${invoice.payment_terms}</p>` : ''}
+                        ${invoice.notes ? `<p class="text-sm text-gray-600 mb-3"><strong>Notizen:</strong> ${invoice.notes}</p>` : ''}
+                    </div>
+                    ` : ''}
+                    
+                    <!-- Professional Footer with Company Info (matches PDF) -->
+                    ${companySettings.company_name ? `
+                    <div class="bg-gray-50 border-t-2 border-gray-200 px-8 py-6">
+                        <div class="grid grid-cols-3 gap-8 text-xs text-gray-600">
+                            <!-- Company Info Column -->
+                            <div>
+                                <h5 class="font-semibold text-gray-800 mb-2 text-sm">Rechnungssteller</h5>
+                                <div class="space-y-1">
+                                    <p class="font-semibold text-gray-900">${companySettings.company_name}</p>
+                                    ${companySettings.address ? `<p>${companySettings.address}</p>` : ''}
+                                    ${companySettings.postal_code && companySettings.city ? `<p>${companySettings.postal_code} ${companySettings.city}</p>` : ''}
+                                    ${companySettings.country ? `<p>${companySettings.country}</p>` : ''}
+                                </div>
+                            </div>
+                            
+                            <!-- Contact Info Column -->
+                            <div>
+                                <h5 class="font-semibold text-gray-800 mb-2 text-sm">Kontakt</h5>
+                                <div class="space-y-1">
+                                    ${companySettings.phone ? `<p><strong>Tel:</strong> ${companySettings.phone}</p>` : ''}
+                                    ${companySettings.email ? `<p><strong>E-Mail:</strong> ${companySettings.email}</p>` : ''}
+                                    ${companySettings.website ? `<p><strong>Web:</strong> ${companySettings.website}</p>` : ''}
+                                    ${companySettings.tax_number ? `<p><strong>MwSt-Nr:</strong> ${companySettings.tax_number}</p>` : ''}
+                                </div>
+                            </div>
+                            
+                            <!-- Banking Info Column -->
+                            <div>
+                                <h5 class="font-semibold text-gray-800 mb-2 text-sm">Banking</h5>
+                                <div class="space-y-1">
+                                    ${companySettings.iban ? `<p><strong>IBAN:</strong> ${companySettings.iban}</p>` : ''}
+                                    ${companySettings.bank_account ? `<p><strong>Bank:</strong> ${companySettings.bank_account}</p>` : ''}
+                                    ${companySettings.bic_swift ? `<p><strong>BIC:</strong> ${companySettings.bic_swift}</p>` : ''}
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="text-center mt-6 pt-4 border-t border-gray-300">
+                            <p class="text-xs text-gray-500 italic">
+                                Diese Rechnung wurde automatisch generiert am ${new Date().toLocaleDateString('de-CH')} um ${new Date().toLocaleTimeString('de-CH')}.
+                            </p>
+                        </div>
+                    </div>
+                    ` : ''}
+                </div>
+            </div>
+        </div>
+    `;
+    
+    document.getElementById('modal-container').innerHTML = modalHtml;
+}
+
 async function deleteInvoice(id) {
     if (!confirm('Sind Sie sicher, dass Sie diese Rechnung löschen möchten?')) {
         return;
@@ -1274,6 +1522,193 @@ async function deleteInvoice(id) {
     } catch (error) {
         console.error('Error deleting invoice:', error);
         showNotification('Fehler beim Löschen der Rechnung', 'error');
+    }
+}
+
+async function generateInvoicePDF(id) {
+    try {
+        showNotification('PDF wird generiert...', 'info');
+        
+        // Get invoice data and ensure company settings are loaded
+        const response = await axios.get(`/api/invoices/${id}`);
+        const invoice = response.data.invoice;
+        const items = response.data.items || [];
+        
+        // Make sure company settings are loaded
+        if (!currentCompanySettings) {
+            await loadCompanySettings();
+        }
+        const companySettings = currentCompanySettings || {};
+        
+        // Calculate totals
+        const subtotal = items.reduce((sum, item) => sum + item.total, 0);
+        const taxAmount = subtotal * (invoice.tax_rate / 100);
+        const totalAmount = subtotal + taxAmount;
+        
+        // Create professional PDF content with company settings
+        const pdfContent = `
+            <div style="font-family: 'Helvetica', Arial, sans-serif; padding: 0; max-width: 210mm; margin: 0 auto;">
+                <!-- Header with Logo -->
+                <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 40px; border-bottom: 2px solid #e5e7eb; padding-bottom: 20px;">
+                    <div style="display: flex; align-items: start; gap: 20px;">
+                        ${companySettings.logo_url ? `<img src="${companySettings.logo_url}" alt="Logo" style="max-height: 60px; max-width: 200px; object-fit: contain;">` : ''}
+                        <div>
+                            <h1 style="font-size: 28px; font-weight: bold; color: #1f2937; margin: 0 0 10px 0;">RECHNUNG</h1>
+                            <p style="font-size: 18px; font-weight: 600; color: #374151; margin: 0;">${invoice.invoice_number}</p>
+                        </div>
+                    </div>
+                    <div style="text-align: right; font-size: 12px; color: #6b7280;">
+                        <p style="margin: 0 0 5px 0;"><strong>Rechnungsdatum:</strong> ${new Date(invoice.issue_date).toLocaleDateString('de-CH')}</p>
+                        ${invoice.due_date ? `<p style="margin: 0 0 5px 0;"><strong>Fälligkeitsdatum:</strong> ${new Date(invoice.due_date).toLocaleDateString('de-CH')}</p>` : ''}
+                        <p style="margin: 0;"><strong>Status:</strong> ${getInvoiceStatusText(invoice.status)}</p>
+                    </div>
+                </div>
+                
+                <!-- Customer Address -->
+                <div style="margin-bottom: 40px;">
+                    <h3 style="font-size: 16px; font-weight: 600; margin-bottom: 15px; color: #374151;">Rechnungsadresse:</h3>
+                    <div style="background-color: #f9fafb; padding: 20px; border-radius: 8px; border-left: 4px solid #3b82f6;">
+                        <p style="font-weight: 600; margin: 0 0 5px 0; font-size: 16px;">${invoice.company_name}</p>
+                        ${invoice.contact_person ? `<p style="margin: 0 0 5px 0;">${invoice.contact_person}</p>` : ''}
+                        ${invoice.address ? `<p style="margin: 0 0 5px 0;">${invoice.address}</p>` : ''}
+                        ${invoice.postal_code && invoice.city ? `<p style="margin: 0 0 5px 0;">${invoice.postal_code} ${invoice.city}</p>` : ''}
+                        ${invoice.country ? `<p style="margin: 0 0 10px 0;">${invoice.country}</p>` : ''}
+                        ${invoice.email ? `<p style="margin: 0; color: #6b7280; font-size: 14px;"><strong>E-Mail:</strong> ${invoice.email}</p>` : ''}
+                    </div>
+                </div>
+                
+                <!-- Items Table -->
+                <div style="margin-bottom: 40px;">
+                    <h3 style="font-size: 16px; font-weight: 600; margin-bottom: 15px; color: #374151;">Rechnungsposten:</h3>
+                    <table style="width: 100%; border-collapse: collapse; border: 1px solid #d1d5db; border-radius: 8px; overflow: hidden;">
+                        <thead>
+                            <tr style="background-color: #f3f4f6;">
+                                <th style="border-right: 1px solid #d1d5db; padding: 12px; text-align: left; font-weight: 600; color: #374151;">Beschreibung</th>
+                                <th style="border-right: 1px solid #d1d5db; padding: 12px; text-align: center; font-weight: 600; color: #374151; width: 80px;">Menge</th>
+                                <th style="border-right: 1px solid #d1d5db; padding: 12px; text-align: right; font-weight: 600; color: #374151; width: 100px;">Einzelpreis</th>
+                                <th style="padding: 12px; text-align: right; font-weight: 600; color: #374151; width: 100px;">Summe</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${items.map((item, index) => `
+                                <tr style="background-color: ${index % 2 === 0 ? '#ffffff' : '#f9fafb'};">
+                                    <td style="border-right: 1px solid #e5e7eb; ${index < items.length - 1 ? 'border-bottom: 1px solid #e5e7eb;' : ''} padding: 12px; color: #374151;">${item.description}</td>
+                                    <td style="border-right: 1px solid #e5e7eb; ${index < items.length - 1 ? 'border-bottom: 1px solid #e5e7eb;' : ''} padding: 12px; text-align: center; color: #374151;">${item.quantity}</td>
+                                    <td style="border-right: 1px solid #e5e7eb; ${index < items.length - 1 ? 'border-bottom: 1px solid #e5e7eb;' : ''} padding: 12px; text-align: right; color: #374151;">${formatCurrency(item.unit_price)}</td>
+                                    <td style="${index < items.length - 1 ? 'border-bottom: 1px solid #e5e7eb;' : ''} padding: 12px; text-align: right; font-weight: 600; color: #1f2937;">${formatCurrency(item.total)}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+                
+                <!-- Totals -->
+                <div style="display: flex; justify-content: flex-end; margin-bottom: 40px;">
+                    <div style="width: 300px; background-color: #f9fafb; padding: 20px; border-radius: 8px; border: 1px solid #e5e7eb;">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 10px; color: #374151;">
+                            <span>Zwischensumme:</span>
+                            <span style="font-weight: 600;">${formatCurrency(subtotal)}</span>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 15px; color: #374151;">
+                            <span>MwSt. (${invoice.tax_rate}%):</span>
+                            <span style="font-weight: 600;">${formatCurrency(taxAmount)}</span>
+                        </div>
+                        <hr style="margin: 15px 0; border: 1px solid #374151;">
+                        <div style="display: flex; justify-content: space-between; font-size: 18px; font-weight: bold; color: #1f2937;">
+                            <span>Gesamtbetrag:</span>
+                            <span>${formatCurrency(totalAmount)}</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Payment Terms & Notes -->
+                ${(invoice.payment_terms || invoice.notes) ? `
+                <div style="border-top: 1px solid #e5e7eb; padding-top: 20px; margin-bottom: 30px; font-size: 12px; color: #6b7280;">
+                    ${invoice.payment_terms ? `<p style="margin: 0 0 10px 0;"><strong>Zahlungsbedingungen:</strong> ${invoice.payment_terms}</p>` : ''}
+                    ${invoice.notes ? `<p style="margin: 0 0 10px 0;"><strong>Notizen:</strong> ${invoice.notes}</p>` : ''}
+                </div>
+                ` : ''}
+                
+                <!-- Professional Footer with Company Info -->
+                ${companySettings.company_name ? `
+                <div style="border-top: 2px solid #d1d5db; padding-top: 20px; margin-top: 30px;">
+                    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; font-size: 10px; color: #6b7280;">
+                        <div>
+                            <h5 style="font-weight: 600; color: #374151; margin: 0 0 8px 0; font-size: 11px;">Rechnungssteller</h5>
+                            <p style="font-weight: 600; color: #1f2937; margin: 0 0 3px 0;">${companySettings.company_name}</p>
+                            ${companySettings.address ? `<p style="margin: 0 0 2px 0;">${companySettings.address}</p>` : ''}
+                            ${companySettings.postal_code && companySettings.city ? `<p style="margin: 0 0 2px 0;">${companySettings.postal_code} ${companySettings.city}</p>` : ''}
+                            ${companySettings.country ? `<p style="margin: 0;">${companySettings.country}</p>` : ''}
+                        </div>
+                        <div>
+                            <h5 style="font-weight: 600; color: #374151; margin: 0 0 8px 0; font-size: 11px;">Kontakt</h5>
+                            ${companySettings.phone ? `<p style="margin: 0 0 2px 0;"><strong>Tel:</strong> ${companySettings.phone}</p>` : ''}
+                            ${companySettings.email ? `<p style="margin: 0 0 2px 0;"><strong>E-Mail:</strong> ${companySettings.email}</p>` : ''}
+                            ${companySettings.website ? `<p style="margin: 0 0 2px 0;"><strong>Web:</strong> ${companySettings.website}</p>` : ''}
+                            ${companySettings.tax_number ? `<p style="margin: 0;"><strong>MwSt-Nr:</strong> ${companySettings.tax_number}</p>` : ''}
+                        </div>
+                        <div>
+                            <h5 style="font-weight: 600; color: #374151; margin: 0 0 8px 0; font-size: 11px;">Banking</h5>
+                            ${companySettings.iban ? `<p style="margin: 0 0 2px 0;"><strong>IBAN:</strong> ${companySettings.iban}</p>` : ''}
+                            ${companySettings.bank_account ? `<p style="margin: 0 0 2px 0;"><strong>Bank:</strong> ${companySettings.bank_account}</p>` : ''}
+                            ${companySettings.bic_swift ? `<p style="margin: 0;"><strong>BIC:</strong> ${companySettings.bic_swift}</p>` : ''}
+                        </div>
+                    </div>
+                    <div style="text-align: center; margin-top: 20px; padding-top: 15px; border-top: 1px solid #e5e7eb;">
+                        <p style="margin: 0; font-size: 10px; color: #9ca3af; font-style: italic;">
+                            Diese Rechnung wurde automatisch generiert am ${new Date().toLocaleDateString('de-CH')} um ${new Date().toLocaleTimeString('de-CH')}.
+                        </p>
+                    </div>
+                </div>
+                ` : ''}
+            </div>
+        `;
+        
+        // Use the browser's print functionality to "print to PDF"
+        const printWindow = window.open('', '_blank');
+        printWindow.document.write(`
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Rechnung ${invoice.invoice_number}</title>
+                <style>
+                    @page { 
+                        margin: 1.5cm; 
+                        size: A4;
+                    }
+                    @media print {
+                        body { 
+                            margin: 0; 
+                            -webkit-print-color-adjust: exact;
+                            print-color-adjust: exact;
+                        }
+                    }
+                    body { 
+                        font-family: 'Helvetica', Arial, sans-serif; 
+                        font-size: 12px;
+                        line-height: 1.4;
+                        color: #333;
+                    }
+                </style>
+            </head>
+            <body>
+                ${pdfContent}
+            </body>
+            </html>
+        `);
+        printWindow.document.close();
+        
+        // Auto-focus and print
+        printWindow.focus();
+        setTimeout(() => {
+            printWindow.print();
+        }, 500);
+        
+        showNotification('PDF-Druckdialog geöffnet. Wählen Sie "Als PDF speichern" im Druckdialog.', 'success');
+        
+    } catch (error) {
+        console.error('Error generating PDF:', error);
+        showNotification('Fehler beim Generieren des PDFs', 'error');
     }
 }
 
@@ -1616,22 +2051,258 @@ function showQuoteModal(quoteId = null) {
     showNotification('Vollständiges Angebotsmodul wird in der nächsten Version implementiert', 'info');
 }
 
-// Placeholder functions for PDF generation and viewing
-function generateInvoicePDF(id) {
-    showNotification('PDF-Export wird implementiert - Vollständige Funktionalität kommt bald!', 'info');
-}
-
 function generateQuotePDF(id) {
     showNotification('PDF-Export wird implementiert - Vollständige Funktionalität kommt bald!', 'info');
-}
-
-function viewInvoice(id) {
-    showNotification('Anzeige-Funktion wird implementiert', 'info');
 }
 
 function viewQuote(id) {
     showNotification('Anzeige-Funktion wird implementiert', 'info');
 }
+
+// Company Settings Management
+let currentCompanySettings = null;
+
+async function loadCompanySettings() {
+    try {
+        const response = await axios.get('/api/company-settings');
+        currentCompanySettings = response.data.settings;
+        populateCompanySettingsForm();
+        updateCompanyPreview();
+    } catch (error) {
+        console.error('Error loading company settings:', error);
+        // Initialize with empty settings if none exist
+        currentCompanySettings = null;
+    }
+}
+
+function populateCompanySettingsForm() {
+    if (!currentCompanySettings) return;
+    
+    const fields = {
+        'company_name': currentCompanySettings.company_name || '',
+        'company_address': currentCompanySettings.address || '',
+        'company_postal_code': currentCompanySettings.postal_code || '',
+        'company_city': currentCompanySettings.city || '',
+        'company_country': currentCompanySettings.country || 'Schweiz',
+        'company_phone': currentCompanySettings.phone || '',
+        'company_email': currentCompanySettings.email || '',
+        'company_website': currentCompanySettings.website || '',
+        'company_iban': currentCompanySettings.iban || '',
+        'company_bank_account': currentCompanySettings.bank_account || '',
+        'company_bic_swift': currentCompanySettings.bic_swift || '',
+        'company_tax_number': currentCompanySettings.tax_number || '',
+        'company_default_tax_rate': currentCompanySettings.default_tax_rate || 8.1,
+        'company_default_payment_terms': currentCompanySettings.default_payment_terms || '30 Tage'
+    };
+    
+    Object.entries(fields).forEach(([fieldId, value]) => {
+        const element = document.getElementById(fieldId);
+        if (element) {
+            element.value = value;
+        }
+    });
+    
+    // Handle logo data (could be base64 or URL)
+    const logoData = currentCompanySettings.logo_url || '';
+    if (logoData) {
+        if (logoData.startsWith('data:image/')) {
+            // It's base64 data - use uploaded logo field
+            document.getElementById('company_logo_base64').value = logoData;
+            document.getElementById('company_logo_url').value = '';
+            updateLogoPreview(logoData);
+        } else {
+            // It's a URL - use URL field
+            document.getElementById('company_logo_url').value = logoData;
+            document.getElementById('company_logo_base64').value = '';
+            updateLogoPreview(logoData);
+        }
+    }
+}
+
+async function saveCompanySettings() {
+    try {
+        // Get logo data (priority: base64 > URL)
+        const logoBase64 = document.getElementById('company_logo_base64').value;
+        const logoUrl = document.getElementById('company_logo_url').value;
+        const logoData = logoBase64 || logoUrl;
+        
+        const formData = {
+            company_name: document.getElementById('company_name').value,
+            address: document.getElementById('company_address').value,
+            postal_code: document.getElementById('company_postal_code').value,
+            city: document.getElementById('company_city').value,
+            country: document.getElementById('company_country').value,
+            phone: document.getElementById('company_phone').value,
+            email: document.getElementById('company_email').value,
+            website: document.getElementById('company_website').value,
+            logo_url: logoData, // This will be either base64 or URL
+            iban: document.getElementById('company_iban').value,
+            bank_account: document.getElementById('company_bank_account').value,
+            bic_swift: document.getElementById('company_bic_swift').value,
+            tax_number: document.getElementById('company_tax_number').value,
+            default_tax_rate: parseFloat(document.getElementById('company_default_tax_rate').value) || 8.1,
+            default_payment_terms: document.getElementById('company_default_payment_terms').value
+        };
+        
+        const response = await axios.post('/api/company-settings', formData);
+        currentCompanySettings = response.data.settings;
+        
+        updateCompanyPreview();
+        showNotification('Firmeneinstellungen erfolgreich gespeichert!', 'success');
+    } catch (error) {
+        console.error('Error saving company settings:', error);
+        showNotification('Fehler beim Speichern der Einstellungen', 'error');
+    }
+}
+
+function updateCompanyPreview() {
+    // Update logo preview
+    const logoPreview = document.getElementById('preview-logo');
+    const logoData = getCurrentLogoData();
+    if (logoData && logoPreview) {
+        logoPreview.innerHTML = `<img src="${logoData}" alt="Firmenlogo" class="h-12 max-w-48 object-contain">`;
+    } else if (logoPreview) {
+        logoPreview.innerHTML = '<span class="text-gray-400 italic">Logo wird hier angezeigt</span>';
+    }
+    
+    // Update company info preview
+    const companyPreview = document.getElementById('preview-company-info');
+    const companyName = document.getElementById('company_name').value;
+    const address = document.getElementById('company_address').value;
+    const postalCode = document.getElementById('company_postal_code').value;
+    const city = document.getElementById('company_city').value;
+    const country = document.getElementById('company_country').value;
+    
+    if (companyName && companyPreview) {
+        let html = `<p class="font-semibold">${companyName}</p>`;
+        if (address) html += `<p>${address}</p>`;
+        if (postalCode && city) html += `<p>${postalCode} ${city}</p>`;
+        if (country) html += `<p>${country}</p>`;
+        companyPreview.innerHTML = html;
+    } else if (companyPreview) {
+        companyPreview.innerHTML = '<p class="text-gray-400 italic">Firmendaten werden hier angezeigt</p>';
+    }
+    
+    // Update contact info preview
+    const contactPreview = document.getElementById('preview-contact-info');
+    const phone = document.getElementById('company_phone').value;
+    const email = document.getElementById('company_email').value;
+    const website = document.getElementById('company_website').value;
+    
+    if ((phone || email || website) && contactPreview) {
+        let html = '';
+        if (phone) html += `<p><i class="fas fa-phone mr-1"></i> ${phone}</p>`;
+        if (email) html += `<p><i class="fas fa-envelope mr-1"></i> ${email}</p>`;
+        if (website) html += `<p><i class="fas fa-globe mr-1"></i> ${website}</p>`;
+        contactPreview.innerHTML = html;
+    } else if (contactPreview) {
+        contactPreview.innerHTML = '<p class="text-gray-400 italic">Kontaktdaten werden hier angezeigt</p>';
+    }
+    
+    // Update banking info preview
+    const bankingPreview = document.getElementById('preview-banking-info');
+    const iban = document.getElementById('company_iban').value;
+    const bank = document.getElementById('company_bank_account').value;
+    const taxNumber = document.getElementById('company_tax_number').value;
+    
+    if ((iban || bank || taxNumber) && bankingPreview) {
+        let html = '';
+        if (iban) html += `<p><strong>IBAN:</strong> ${iban}</p>`;
+        if (bank) html += `<p><strong>Bank:</strong> ${bank}</p>`;
+        if (taxNumber) html += `<p><strong>MwSt-Nr:</strong> ${taxNumber}</p>`;
+        bankingPreview.innerHTML = html;
+    } else if (bankingPreview) {
+        bankingPreview.innerHTML = '<p class="text-gray-400 italic">Bankdaten werden hier angezeigt</p>';
+    }
+}
+
+// Logo Upload Functionality
+function handleLogoUpload(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    
+    // Validate file type
+    if (!file.type.startsWith('image/')) {
+        showNotification('Bitte wählen Sie eine Bilddatei (PNG, JPG, SVG)', 'error');
+        return;
+    }
+    
+    // Validate file size (max 2MB)
+    if (file.size > 2 * 1024 * 1024) {
+        showNotification('Logo darf maximal 2MB groß sein', 'error');
+        return;
+    }
+    
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        const base64Data = e.target.result;
+        
+        // Store base64 in hidden field
+        document.getElementById('company_logo_base64').value = base64Data;
+        
+        // Clear URL field since we're using uploaded file
+        document.getElementById('company_logo_url').value = '';
+        
+        // Update preview
+        updateLogoPreview(base64Data);
+        updateCompanyPreview();
+        
+        showNotification('Logo erfolgreich hochgeladen!', 'success');
+    };
+    
+    reader.readAsDataURL(file);
+}
+
+function updateLogoPreview(logoData) {
+    const previewContainer = document.getElementById('logo-preview-container');
+    const previewImage = document.getElementById('logo-preview-image');
+    
+    if (logoData && previewContainer && previewImage) {
+        previewImage.src = logoData;
+        previewContainer.classList.remove('hidden');
+    } else if (previewContainer) {
+        previewContainer.classList.add('hidden');
+    }
+}
+
+function removeLogo() {
+    document.getElementById('company_logo_base64').value = '';
+    document.getElementById('company_logo_url').value = '';
+    document.getElementById('logo-preview-container').classList.add('hidden');
+    
+    // Clear file input
+    const fileInput = document.getElementById('company_logo_file');
+    if (fileInput) {
+        fileInput.value = '';
+    }
+    
+    updateCompanyPreview();
+    showNotification('Logo entfernt', 'info');
+}
+
+function getCurrentLogoData() {
+    // Priority: uploaded base64 > URL
+    const base64Data = document.getElementById('company_logo_base64')?.value;
+    const urlData = document.getElementById('company_logo_url')?.value;
+    
+    return base64Data || urlData || null;
+}
+
+// Add event listeners for real-time preview updates
+document.addEventListener('DOMContentLoaded', function() {
+    const previewFields = [
+        'company_name', 'company_address', 'company_postal_code', 'company_city', 'company_country',
+        'company_phone', 'company_email', 'company_website', 'company_logo_url',
+        'company_iban', 'company_bank_account', 'company_tax_number'
+    ];
+    
+    previewFields.forEach(fieldId => {
+        const field = document.getElementById(fieldId);
+        if (field) {
+            field.addEventListener('input', updateCompanyPreview);
+        }
+    });
+});
 
 function editQuote(id) {
     showNotification('Angebots-Bearbeitung wird in der nächsten Version implementiert', 'info');
@@ -1687,5 +2358,618 @@ async function deleteProject(id) {
     } catch (error) {
         console.error('Error deleting project:', error);
         showNotification('Fehler beim Löschen des Projekts', 'error');
+    }
+}
+
+// ==============================================
+// ACCOUNTING MODULE FUNCTIONS
+// ==============================================
+
+let currentAccountingCategories = [];
+let currentAccountingEntries = [];
+let currentQRTemplates = [];
+let currentVATRates = [];
+
+// Load accounting data when tab is shown
+async function loadAccountingData() {
+    try {
+        await loadAccountingCategories();
+        await loadAccountingEntries();
+        await loadAccountingSummary();
+        await loadQRTemplates();
+        await loadVATRates();
+    } catch (error) {
+        console.error('Error loading accounting data:', error);
+        showNotification('Fehler beim Laden der Buchhaltungsdaten', 'error');
+    }
+}
+
+// Load accounting categories
+async function loadAccountingCategories() {
+    try {
+        const response = await axios.get('/api/accounting/categories');
+        currentAccountingCategories = response.data.categories;
+        
+        // Populate category filter
+        const categoryFilter = document.getElementById('accounting-category-filter');
+        if (categoryFilter) {
+            categoryFilter.innerHTML = '<option value="">Alle Kategorien</option>';
+            currentAccountingCategories.forEach(category => {
+                const option = document.createElement('option');
+                option.value = category.id;
+                option.textContent = `${category.name} (${category.type === 'income' ? 'Einnahme' : 'Ausgabe'})`;
+                categoryFilter.appendChild(option);
+            });
+        }
+    } catch (error) {
+        console.error('Error loading accounting categories:', error);
+    }
+}
+
+// Load VAT rates
+async function loadVATRates() {
+    try {
+        const response = await axios.get('/api/accounting/vat-rates');
+        currentVATRates = response.data.vatRates;
+    } catch (error) {
+        console.error('Error loading VAT rates:', error);
+    }
+}
+
+// Load accounting entries
+async function loadAccountingEntries() {
+    try {
+        const response = await axios.get('/api/accounting/entries');
+        currentAccountingEntries = response.data.entries;
+        
+        // Apply filters
+        const typeFilter = document.getElementById('accounting-type-filter')?.value;
+        const categoryFilter = document.getElementById('accounting-category-filter')?.value;
+        const statusFilter = document.getElementById('accounting-status-filter')?.value;
+        
+        let filteredEntries = currentAccountingEntries;
+        
+        if (typeFilter) {
+            filteredEntries = filteredEntries.filter(entry => entry.entry_type === typeFilter);
+        }
+        if (categoryFilter) {
+            filteredEntries = filteredEntries.filter(entry => entry.category_id == categoryFilter);
+        }
+        if (statusFilter) {
+            filteredEntries = filteredEntries.filter(entry => entry.status === statusFilter);
+        }
+        
+        // Populate table
+        const tableBody = document.getElementById('accounting-entries-table');
+        if (tableBody) {
+            tableBody.innerHTML = '';
+            
+            filteredEntries.forEach(entry => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        ${new Date(entry.entry_date).toLocaleDateString('de-CH')}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        <span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${entry.entry_type === 'income' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}">
+                            ${entry.entry_type === 'income' ? 'Einnahme' : 'Ausgabe'}
+                        </span>
+                    </td>
+                    <td class="px-6 py-4 text-sm text-gray-900">
+                        <div class="max-w-xs truncate" title="${entry.description}">
+                            ${entry.description}
+                        </div>
+                        ${entry.receipt_number ? `<div class="text-xs text-gray-500">Beleg: ${entry.receipt_number}</div>` : ''}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        ${entry.category_name ? `
+                            <span class="inline-flex items-center px-2 py-1 rounded text-xs font-medium" style="background-color: ${entry.category_color}20; color: ${entry.category_color};">
+                                ${entry.category_name}
+                            </span>
+                        ` : '-'}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm font-medium ${entry.entry_type === 'income' ? 'text-green-600' : 'text-red-600'}">
+                        ${formatCurrency(entry.total_amount)}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        ${entry.vat_rate > 0 ? `${entry.vat_rate}% (${formatCurrency(entry.vat_amount)})` : '-'}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        <span class="px-2 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${getAccountingStatusColor(entry.status)}">
+                            ${getAccountingStatusText(entry.status)}
+                        </span>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                        <div class="flex space-x-2">
+                            ${entry.receipt_image_url ? `
+                                <button onclick="showReceiptImage('${entry.receipt_image_url}')" class="text-blue-600 hover:text-blue-900" title="Beleg anzeigen">
+                                    <i class="fas fa-image"></i>
+                                </button>
+                            ` : ''}
+                            <button onclick="showAccountingEntryModal(${entry.id})" class="text-indigo-600 hover:text-indigo-900" title="Bearbeiten">
+                                <i class="fas fa-edit"></i>
+                            </button>
+                            <button onclick="deleteAccountingEntry(${entry.id})" class="text-red-600 hover:text-red-900" title="Löschen">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        </div>
+                    </td>
+                `;
+                tableBody.appendChild(row);
+            });
+        }
+    } catch (error) {
+        console.error('Error loading accounting entries:', error);
+    }
+}
+
+// Load accounting summary
+async function loadAccountingSummary() {
+    try {
+        const year = document.getElementById('accounting-year-filter')?.value || new Date().getFullYear();
+        const response = await axios.get(`/api/accounting/reports/summary?year=${year}`);
+        const summary = response.data;
+        
+        // Update summary cards
+        const totalIncomeEl = document.getElementById('total-income');
+        if (totalIncomeEl) {
+            totalIncomeEl.textContent = formatCurrency(summary.income?.total_amount || 0);
+        }
+        
+        const totalExpensesEl = document.getElementById('total-expenses');
+        if (totalExpensesEl) {
+            totalExpensesEl.textContent = formatCurrency(summary.expenses?.total_amount || 0);
+        }
+        
+        const netProfitEl = document.getElementById('net-profit');
+        if (netProfitEl) {
+            const profit = (summary.income?.total_amount || 0) - (summary.expenses?.total_amount || 0);
+            netProfitEl.textContent = formatCurrency(profit);
+            netProfitEl.className = `text-2xl font-bold ${profit >= 0 ? 'text-green-600' : 'text-red-600'}`;
+        }
+        
+        const vatOwedEl = document.getElementById('vat-owed');
+        if (vatOwedEl) {
+            const vatOwed = (summary.income?.vat_amount || 0) - (summary.expenses?.vat_amount || 0);
+            vatOwedEl.textContent = formatCurrency(Math.max(0, vatOwed));
+        }
+    } catch (error) {
+        console.error('Error loading accounting summary:', error);
+    }
+}
+
+// Load QR templates
+async function loadQRTemplates() {
+    try {
+        const response = await axios.get('/api/accounting/qr-templates');
+        currentQRTemplates = response.data.templates;
+    } catch (error) {
+        console.error('Error loading QR templates:', error);
+    }
+}
+
+// Show accounting entry modal
+async function showAccountingEntryModal(id = null) {
+    let entry = null;
+    if (id) {
+        try {
+            const response = await axios.get(`/api/accounting/entries/${id}`);
+            entry = response.data.entry;
+        } catch (error) {
+            console.error('Error loading entry:', error);
+            showNotification('Fehler beim Laden des Eintrags', 'error');
+            return;
+        }
+    }
+    
+    // Ensure categories are loaded
+    if (currentAccountingCategories.length === 0) {
+        await loadAccountingCategories();
+    }
+    
+    // Category options
+    const categoryOptions = currentAccountingCategories.map(cat => 
+        `<option value="${cat.id}" ${entry && entry.category_id == cat.id ? 'selected' : ''}>
+            ${cat.name} (${cat.type === 'income' ? 'Einnahme' : 'Ausgabe'})
+        </option>`
+    ).join('');
+    
+    // Customer options for income entries
+    const customerOptions = currentCustomers.map(customer => 
+        `<option value="${customer.id}" ${entry && entry.customer_id == customer.id ? 'selected' : ''}>
+            ${customer.company_name}
+        </option>`
+    ).join('');
+    
+    // Project options
+    const projectOptions = currentProjects.map(project => 
+        `<option value="${project.id}" ${entry && entry.project_id == project.id ? 'selected' : ''}>
+            ${project.name}
+        </option>`
+    ).join('');
+    
+    // VAT rate options
+    const vatOptions = currentVATRates.map(vat => 
+        `<option value="${vat.rate_percentage}" ${entry && entry.vat_rate == vat.rate_percentage ? 'selected' : ''}>
+            ${vat.country_code} - ${vat.rate_percentage}% (${vat.description})
+        </option>`
+    ).join('');
+    
+    const modalHtml = `
+        <div class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50" id="accounting-entry-modal">
+            <div class="relative top-20 mx-auto p-5 border w-full max-w-2xl shadow-lg rounded-md bg-white">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-lg font-medium text-gray-900">
+                        <i class="fas fa-calculator text-green-600 mr-2"></i>
+                        ${entry ? 'Buchung bearbeiten' : 'Neue Buchung'}
+                    </h3>
+                    <button onclick="closeModal('accounting-entry-modal')" class="text-gray-400 hover:text-gray-600">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                
+                <form id="accounting-entry-form">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Typ *</label>
+                            <select id="entry_type" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" onchange="toggleCustomerField()">
+                                <option value="expense" ${!entry || entry.entry_type === 'expense' ? 'selected' : ''}>Ausgabe</option>
+                                <option value="income" ${entry && entry.entry_type === 'income' ? 'selected' : ''}>Einnahme</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Datum *</label>
+                            <input type="date" id="entry_date" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" 
+                                   value="${entry ? entry.entry_date : new Date().toISOString().split('T')[0]}">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Betrag (ohne MwSt) *</label>
+                            <input type="number" step="0.01" id="amount" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" 
+                                   value="${entry ? entry.amount : ''}" onchange="calculateVAT()" placeholder="0.00">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">MwSt-Satz</label>
+                            <select id="vat_rate" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" onchange="calculateVAT()">
+                                <option value="0">0% (Keine MwSt)</option>
+                                ${vatOptions}
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">MwSt-Betrag</label>
+                            <input type="number" step="0.01" id="vat_amount" readonly class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md bg-gray-100" 
+                                   value="${entry ? entry.vat_amount : '0.00'}">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Gesamtbetrag</label>
+                            <input type="number" step="0.01" id="total_amount" readonly class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md bg-gray-100 font-bold" 
+                                   value="${entry ? entry.total_amount : '0.00'}">
+                        </div>
+                    </div>
+                    
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium text-gray-700">Beschreibung *</label>
+                        <textarea id="description" required rows="3" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" 
+                                  placeholder="Beschreibung der Buchung...">${entry ? entry.description : ''}</textarea>
+                    </div>
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Kategorie</label>
+                            <select id="category_id" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md">
+                                <option value="">Kategorie wählen...</option>
+                                ${categoryOptions}
+                            </select>
+                        </div>
+                        <div id="customer-field" class="hidden">
+                            <label class="block text-sm font-medium text-gray-700">Kunde</label>
+                            <select id="customer_id" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md">
+                                <option value="">Kunde wählen...</option>
+                                ${customerOptions}
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Projekt</label>
+                            <select id="project_id" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md">
+                                <option value="">Projekt wählen...</option>
+                                ${projectOptions}
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700">Belegnummer</label>
+                            <input type="text" id="receipt_number" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" 
+                                   value="${entry ? entry.receipt_number || '' : ''}" placeholder="Optional">
+                        </div>
+                    </div>
+                    
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium text-gray-700">Notizen</label>
+                        <textarea id="notes" rows="2" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" 
+                                  placeholder="Zusätzliche Notizen...">${entry ? entry.notes || '' : ''}</textarea>
+                    </div>
+                    
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium text-gray-700">Status</label>
+                        <select id="status" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md">
+                            <option value="draft" ${!entry || entry.status === 'draft' ? 'selected' : ''}>Entwurf</option>
+                            <option value="confirmed" ${entry && entry.status === 'confirmed' ? 'selected' : ''}>Bestätigt</option>
+                            <option value="reconciled" ${entry && entry.status === 'reconciled' ? 'selected' : ''}>Abgestimmt</option>
+                        </select>
+                    </div>
+                    
+                    <div class="flex justify-end space-x-3">
+                        <button type="button" onclick="closeModal('accounting-entry-modal')" class="px-4 py-2 bg-gray-300 text-gray-700 rounded-md hover:bg-gray-400">
+                            Abbrechen
+                        </button>
+                        <button type="submit" class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700">
+                            <i class="fas fa-save mr-1"></i>
+                            ${entry ? 'Aktualisieren' : 'Erstellen'}
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    `;
+    
+    document.getElementById('modal-container').innerHTML = modalHtml;
+    
+    // Toggle customer field based on type
+    toggleCustomerField();
+    
+    // Calculate VAT on load if entry exists
+    if (entry) {
+        calculateVAT();
+    }
+    
+    document.getElementById('accounting-entry-form').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        await saveAccountingEntry(entry?.id);
+    });
+}
+
+// Toggle customer field visibility
+function toggleCustomerField() {
+    const entryType = document.getElementById('entry_type').value;
+    const customerField = document.getElementById('customer-field');
+    
+    if (entryType === 'income') {
+        customerField.classList.remove('hidden');
+    } else {
+        customerField.classList.add('hidden');
+        document.getElementById('customer_id').value = '';
+    }
+}
+
+// Calculate VAT amount
+function calculateVAT() {
+    const amount = parseFloat(document.getElementById('amount').value) || 0;
+    const vatRate = parseFloat(document.getElementById('vat_rate').value) || 0;
+    const vatAmount = amount * (vatRate / 100);
+    const totalAmount = amount + vatAmount;
+    
+    document.getElementById('vat_amount').value = vatAmount.toFixed(2);
+    document.getElementById('total_amount').value = totalAmount.toFixed(2);
+}
+
+// Save accounting entry
+async function saveAccountingEntry(id = null) {
+    const formData = {
+        entry_type: document.getElementById('entry_type').value,
+        amount: parseFloat(document.getElementById('amount').value),
+        vat_rate: parseFloat(document.getElementById('vat_rate').value) || 0,
+        vat_amount: parseFloat(document.getElementById('vat_amount').value) || 0,
+        total_amount: parseFloat(document.getElementById('total_amount').value) || 0,
+        entry_date: document.getElementById('entry_date').value,
+        description: document.getElementById('description').value,
+        category_id: document.getElementById('category_id').value || null,
+        customer_id: document.getElementById('customer_id').value || null,
+        project_id: document.getElementById('project_id').value || null,
+        receipt_number: document.getElementById('receipt_number').value || null,
+        notes: document.getElementById('notes').value || null,
+        status: document.getElementById('status').value
+    };
+    
+    try {
+        if (id) {
+            await axios.put(`/api/accounting/entries/${id}`, formData);
+            showNotification('Buchung erfolgreich aktualisiert!', 'success');
+        } else {
+            await axios.post('/api/accounting/entries', formData);
+            showNotification('Buchung erfolgreich erstellt!', 'success');
+        }
+        
+        closeModal('accounting-entry-modal');
+        await loadAccountingEntries();
+        await loadAccountingSummary();
+    } catch (error) {
+        console.error('Error saving accounting entry:', error);
+        showNotification('Fehler beim Speichern der Buchung', 'error');
+    }
+}
+
+// Delete accounting entry
+async function deleteAccountingEntry(id) {
+    if (!confirm('Sind Sie sicher, dass Sie diese Buchung löschen möchten?')) {
+        return;
+    }
+    
+    try {
+        await axios.delete(`/api/accounting/entries/${id}`);
+        await loadAccountingEntries();
+        await loadAccountingSummary();
+        showNotification('Buchung erfolgreich gelöscht!', 'success');
+    } catch (error) {
+        console.error('Error deleting accounting entry:', error);
+        showNotification('Fehler beim Löschen der Buchung', 'error');
+    }
+}
+
+// Show QR Templates modal
+function showQRTemplatesModal() {
+    const modalHtml = `
+        <div class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50" id="qr-templates-modal">
+            <div class="relative top-20 mx-auto p-5 border w-full max-w-4xl shadow-lg rounded-md bg-white">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-lg font-medium text-gray-900">
+                        <i class="fas fa-qrcode text-purple-600 mr-2"></i>
+                        QR-Code Management
+                    </h3>
+                    <button onclick="closeModal('qr-templates-modal')" class="text-gray-400 hover:text-gray-600">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    ${currentQRTemplates.map(template => `
+                        <div class="bg-gray-50 rounded-lg p-4 border">
+                            <div class="flex justify-between items-start mb-3">
+                                <h4 class="font-semibold text-gray-900">${template.name}</h4>
+                                <span class="px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded">${template.type}</span>
+                            </div>
+                            ${template.description ? `<p class="text-sm text-gray-600 mb-3">${template.description}</p>` : ''}
+                            <div class="space-y-2">
+                                <button onclick="generateQRCode(${template.id})" class="w-full bg-purple-600 hover:bg-purple-700 text-white px-3 py-2 rounded text-sm">
+                                    <i class="fas fa-qrcode mr-1"></i>QR-Code generieren
+                                </button>
+                                <div class="flex space-x-2">
+                                    <button onclick="editQRTemplate(${template.id})" class="flex-1 bg-gray-600 hover:bg-gray-700 text-white px-3 py-1 rounded text-xs">
+                                        <i class="fas fa-edit mr-1"></i>Bearbeiten
+                                    </button>
+                                    <button onclick="deleteQRTemplate(${template.id})" class="flex-1 bg-red-600 hover:bg-red-700 text-white px-3 py-1 rounded text-xs">
+                                        <i class="fas fa-trash mr-1"></i>Löschen
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    `).join('')}
+                    
+                    <!-- Add New Template Card -->
+                    <div class="bg-white rounded-lg p-4 border-2 border-dashed border-gray-300 flex items-center justify-center">
+                        <button onclick="showNewQRTemplateModal()" class="text-gray-400 hover:text-gray-600 text-center">
+                            <i class="fas fa-plus text-2xl mb-2"></i>
+                            <div class="text-sm">Neues Template</div>
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="mt-6 flex justify-end">
+                    <button onclick="closeModal('qr-templates-modal')" class="px-4 py-2 bg-gray-300 text-gray-700 rounded-md hover:bg-gray-400">
+                        Schließen
+                    </button>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    document.getElementById('modal-container').innerHTML = modalHtml;
+}
+
+// Generate QR Code
+async function generateQRCode(templateId) {
+    try {
+        const response = await axios.get(`/api/accounting/qr-code/${templateId}`);
+        const qrData = response.data;
+        
+        // Show QR code modal with the generated URL
+        const qrModalHtml = `
+            <div class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50" id="qr-display-modal">
+                <div class="relative top-20 mx-auto p-5 border w-full max-w-md shadow-lg rounded-md bg-white text-center">
+                    <h3 class="text-lg font-medium text-gray-900 mb-4">
+                        <i class="fas fa-qrcode text-purple-600 mr-2"></i>
+                        QR-Code für ${qrData.template.name}
+                    </h3>
+                    
+                    <div class="mb-4">
+                        <div id="qr-code-container" class="flex justify-center mb-4"></div>
+                        <p class="text-sm text-gray-600 mb-2">
+                            Scannen Sie diesen QR-Code mit Ihrem Smartphone, um Belege hochzuladen.
+                        </p>
+                        <p class="text-xs text-gray-500">
+                            Gültig bis: ${new Date(qrData.expiresAt).toLocaleString('de-CH')}
+                        </p>
+                    </div>
+                    
+                    <div class="space-y-2">
+                        <button onclick="printQRCode()" class="w-full bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded">
+                            <i class="fas fa-print mr-2"></i>QR-Code drucken
+                        </button>
+                        <button onclick="copyQRUrl('${qrData.qrData}')" class="w-full bg-gray-600 hover:bg-gray-700 text-white px-4 py-2 rounded">
+                            <i class="fas fa-copy mr-2"></i>URL kopieren
+                        </button>
+                        <button onclick="closeModal('qr-display-modal')" class="w-full bg-gray-300 text-gray-700 px-4 py-2 rounded hover:bg-gray-400">
+                            Schließen
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        document.getElementById('modal-container').innerHTML = qrModalHtml;
+        
+        // Generate QR code using a library (we'll use QR Server API for simplicity)
+        const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(qrData.qrData)}`;
+        document.getElementById('qr-code-container').innerHTML = 
+            `<img src="${qrCodeUrl}" alt="QR Code" class="border rounded">`;
+        
+    } catch (error) {
+        console.error('Error generating QR code:', error);
+        showNotification('Fehler beim Generieren des QR-Codes', 'error');
+    }
+}
+
+// Copy QR URL to clipboard
+function copyQRUrl(url) {
+    navigator.clipboard.writeText(url).then(() => {
+        showNotification('URL in Zwischenablage kopiert!', 'success');
+    }).catch(err => {
+        console.error('Failed to copy URL: ', err);
+        showNotification('Fehler beim Kopieren der URL', 'error');
+    });
+}
+
+// Print QR Code
+function printQRCode() {
+    window.print();
+}
+
+// Show receipt image
+function showReceiptImage(imageUrl) {
+    const modalHtml = `
+        <div class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50" id="receipt-image-modal" onclick="closeModal('receipt-image-modal')">
+            <div class="relative top-20 mx-auto p-5 border w-full max-w-2xl shadow-lg rounded-md bg-white">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="text-lg font-medium text-gray-900">
+                        <i class="fas fa-receipt text-blue-600 mr-2"></i>
+                        Beleg
+                    </h3>
+                    <button onclick="closeModal('receipt-image-modal')" class="text-gray-400 hover:text-gray-600">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="text-center">
+                    <img src="${imageUrl}" alt="Beleg" class="max-w-full max-h-96 mx-auto rounded border">
+                </div>
+            </div>
+        </div>
+    `;
+    
+    document.getElementById('modal-container').innerHTML = modalHtml;
+}
+
+// Helper functions for accounting status
+function getAccountingStatusColor(status) {
+    switch(status) {
+        case 'draft': return 'bg-gray-100 text-gray-800';
+        case 'confirmed': return 'bg-green-100 text-green-800';
+        case 'reconciled': return 'bg-blue-100 text-blue-800';
+        default: return 'bg-gray-100 text-gray-800';
+    }
+}
+
+function getAccountingStatusText(status) {
+    switch(status) {
+        case 'draft': return 'Entwurf';
+        case 'confirmed': return 'Bestätigt';
+        case 'reconciled': return 'Abgestimmt';
+        default: return 'Unbekannt';
     }
 }

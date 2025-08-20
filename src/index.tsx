@@ -8,6 +8,25 @@ type Bindings = {
 
 const app = new Hono<{ Bindings: Bindings }>()
 
+// Utility functions for PDF generation
+function formatCurrency(amount: number): string {
+  return new Intl.NumberFormat('de-CH', {
+    style: 'currency',
+    currency: 'CHF'
+  }).format(amount)
+}
+
+function getInvoiceStatusText(status: string): string {
+  const statusMap: Record<string, string> = {
+    'draft': 'Entwurf',
+    'sent': 'Versendet',
+    'paid': 'Bezahlt',
+    'overdue': 'Überfällig',
+    'cancelled': 'Storniert'
+  }
+  return statusMap[status] || status
+}
+
 // Enable CORS for API routes
 app.use('/api/*', cors())
 
@@ -792,33 +811,1018 @@ app.get('/api/customers/:id/unbilled-time-entries', async (c) => {
   }
 })
 
-// Initialize database tables
+// PDF Export for invoices
+app.get('/api/invoices/:id/pdf', async (c) => {
+  try {
+    const invoiceId = parseInt(c.req.param('id'))
+    
+    // Get invoice details
+    const invoice = await c.env.DB.prepare(`
+      SELECT i.*, c.company_name, c.contact_person, c.email, c.address, c.city, c.postal_code, c.country
+      FROM invoices i
+      LEFT JOIN customers c ON i.customer_id = c.id
+      WHERE i.id = ?
+    `).bind(invoiceId).first()
+    
+    if (!invoice) {
+      return c.json({ error: 'Invoice not found' }, 404)
+    }
+    
+    // Get company settings for PDF header/footer
+    const companySettings = await c.env.DB.prepare('SELECT * FROM company_settings LIMIT 1').first()
+    
+    // Get invoice items
+    const { results: items } = await c.env.DB.prepare(`
+      SELECT ii.*, te.description as time_description, te.start_time, te.duration_minutes
+      FROM invoice_items ii
+      LEFT JOIN time_entries te ON ii.time_entry_id = te.id
+      WHERE ii.invoice_id = ?
+      ORDER BY ii.id
+    `).bind(invoiceId).all()
+    
+    // Calculate totals
+    const subtotal = items.reduce((sum, item) => sum + item.total, 0)
+    const taxAmount = subtotal * (invoice.tax_rate / 100)
+    const totalAmount = subtotal + taxAmount
+    
+    // Helper function for status text
+    const getInvoiceStatusText = (status) => {
+      switch(status) {
+        case 'draft': return 'Entwurf'
+        case 'sent': return 'Gesendet'
+        case 'paid': return 'Bezahlt'
+        case 'cancelled': return 'Storniert'
+        default: return 'Unbekannt'
+      }
+    }
+    
+    // Helper function for currency formatting
+    const formatCurrency = (amount) => {
+      return new Intl.NumberFormat('de-CH', {
+        style: 'currency',
+        currency: 'CHF'
+      }).format(amount || 0)
+    }
+    
+    // Generate PDF-ready HTML
+    const html = `
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rechnung ${invoice.invoice_number}</title>
+    <style>
+        @page {
+            margin: 2cm;
+            size: A4;
+        }
+        body {
+            font-family: 'Helvetica', 'Arial', sans-serif;
+            font-size: 12px;
+            line-height: 1.4;
+            color: #333;
+            margin: 0;
+            padding: 0;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            border-bottom: 1px solid #e5e7eb;
+            padding-bottom: 15px;
+        }
+        .company-logo-title {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        .invoice-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: #1f2937;
+        }
+        .invoice-number {
+            font-size: 16px;
+            font-weight: bold;
+            color: #1f2937;
+            text-align: right;
+        }
+        .customer-section {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 30px;
+        }
+        .customer-info-wrapper {
+            width: 65%;
+        }
+        .invoice-meta {
+            width: 30%;
+            background-color: #f9fafb;
+            padding: 15px;
+            border-radius: 4px;
+            font-size: 11px;
+        }
+        .invoice-meta-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+        .customer-title {
+            font-size: 12px;
+            font-weight: 600;
+            margin-bottom: 8px;
+            color: #374151;
+        }
+        .customer-info {
+            background-color: #f9fafb;
+            padding: 12px;
+            border-radius: 4px;
+            border-left: 3px solid #3b82f6;
+        }
+        .items-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 30px;
+        }
+        .items-table th {
+            background-color: #f3f4f6;
+            border: 1px solid #d1d5db;
+            padding: 10px;
+            text-align: left;
+            font-weight: 600;
+            color: #374151;
+        }
+        .items-table td {
+            border: 1px solid #d1d5db;
+            padding: 10px;
+            vertical-align: top;
+        }
+        .items-table .text-center {
+            text-align: center;
+        }
+        .items-table .text-right {
+            text-align: right;
+        }
+        .totals-section {
+            display: flex;
+            justify-content: flex-end;
+            margin-bottom: 30px;
+        }
+        .totals-box {
+            width: 300px;
+            background-color: #f9fafb;
+            padding: 20px;
+            border-radius: 4px;
+            border: 1px solid #e5e7eb;
+        }
+        .total-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+        .total-row.final {
+            border-top: 2px solid #374151;
+            padding-top: 10px;
+            margin-top: 10px;
+            font-size: 16px;
+            font-weight: bold;
+        }
+        .footer {
+            border-top: 1px solid #e5e7eb;
+            padding-top: 20px;
+            font-size: 11px;
+            color: #6b7280;
+        }
+        .footer-section {
+            margin-bottom: 10px;
+        }
+        .print-only {
+            display: none;
+        }
+        @media print {
+            .print-only {
+                display: block;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="company-logo-title">
+            ${companySettings?.logo_url ? `<img src="${companySettings.logo_url}" alt="Logo" style="max-height: 45px; max-width: 120px; object-fit: contain;">` : ''}
+            <div class="invoice-title">RECHNUNG</div>
+        </div>
+        <div class="invoice-number">${invoice.invoice_number}</div>
+    </div>
+    
+    <div class="customer-section">
+        <div class="customer-info-wrapper">
+            <div class="customer-title">Rechnungsadresse:</div>
+            <div class="customer-info">
+                <div style="font-weight: 600;">${invoice.company_name}</div>
+                ${invoice.contact_person ? `<div>${invoice.contact_person}</div>` : ''}
+                ${invoice.address ? `<div>${invoice.address}</div>` : ''}
+                ${invoice.postal_code && invoice.city ? `<div>${invoice.postal_code} ${invoice.city}</div>` : ''}
+                ${invoice.country ? `<div>${invoice.country}</div>` : ''}
+                ${invoice.email ? `<div style="margin-top: 8px;"><strong>E-Mail:</strong> ${invoice.email}</div>` : ''}
+            </div>
+        </div>
+        <div class="invoice-meta">
+            <div class="invoice-meta-row">
+                <span>Rechnungsdatum:</span>
+                <span style="font-weight: 600;">${new Date(invoice.issue_date).toLocaleDateString('de-CH')}</span>
+            </div>
+            ${invoice.due_date ? `
+            <div class="invoice-meta-row">
+                <span>Fälligkeitsdatum:</span>
+                <span style="font-weight: 600;">${new Date(invoice.due_date).toLocaleDateString('de-CH')}</span>
+            </div>
+            ` : ''}
+            <div class="invoice-meta-row">
+                <span>Status:</span>
+                <span style="font-weight: 600;">${getInvoiceStatusText(invoice.status)}</span>
+            </div>
+        </div>
+    </div>
+    
+    <table class="items-table">
+        <thead>
+            <tr>
+                <th style="width: 50%;">Beschreibung</th>
+                <th style="width: 15%;" class="text-center">Menge</th>
+                <th style="width: 17.5%;" class="text-right">Einzelpreis</th>
+                <th style="width: 17.5%;" class="text-right">Summe</th>
+            </tr>
+        </thead>
+        <tbody>
+            ${items.map(item => `
+                <tr>
+                    <td>${item.description}</td>
+                    <td class="text-center">${item.quantity}</td>
+                    <td class="text-right">${formatCurrency(item.unit_price)}</td>
+                    <td class="text-right" style="font-weight: 600;">${formatCurrency(item.total)}</td>
+                </tr>
+            `).join('')}
+        </tbody>
+    </table>
+    
+    <div class="totals-section">
+        <div class="totals-box">
+            <div class="total-row">
+                <span>Zwischensumme:</span>
+                <span style="font-weight: 600;">${formatCurrency(subtotal)}</span>
+            </div>
+            <div class="total-row">
+                <span>MwSt. (${invoice.tax_rate}%):</span>
+                <span style="font-weight: 600;">${formatCurrency(taxAmount)}</span>
+            </div>
+            <div class="total-row final">
+                <span>Gesamtbetrag:</span>
+                <span>${formatCurrency(totalAmount)}</span>
+            </div>
+        </div>
+    </div>
+    
+    <div class="footer">
+        ${invoice.payment_terms ? `<div class="footer-section"><strong>Zahlungsbedingungen:</strong> ${invoice.payment_terms}</div>` : ''}
+        ${invoice.notes ? `<div class="footer-section"><strong>Notizen:</strong> ${invoice.notes}</div>` : ''}
+        
+        ${companySettings ? `
+        <div style="border-top: 1px solid #d1d5db; margin-top: 20px; padding-top: 20px;">
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; font-size: 10px;">
+                <div>
+                    <strong>${companySettings.company_name || ''}</strong><br>
+                    ${companySettings.address || ''}<br>
+                    ${companySettings.postal_code || ''} ${companySettings.city || ''}<br>
+                    ${companySettings.country || ''}
+                </div>
+                <div>
+                    ${companySettings.phone ? `<strong>Tel:</strong> ${companySettings.phone}<br>` : ''}
+                    ${companySettings.email ? `<strong>E-Mail:</strong> ${companySettings.email}<br>` : ''}
+                    ${companySettings.website ? `<strong>Web:</strong> ${companySettings.website}<br>` : ''}
+                    ${companySettings.tax_number ? `<strong>MwSt-Nr:</strong> ${companySettings.tax_number}` : ''}
+                </div>
+                <div>
+                    ${companySettings.iban ? `<strong>IBAN:</strong> ${companySettings.iban}<br>` : ''}
+                    ${companySettings.bank_account ? `<strong>Bank:</strong> ${companySettings.bank_account}<br>` : ''}
+                    ${companySettings.bic_swift ? `<strong>BIC:</strong> ${companySettings.bic_swift}` : ''}
+                </div>
+            </div>
+        </div>
+        ` : ''}
+        
+        <div class="footer-section" style="text-align: center; margin-top: 20px;">
+            <em>Diese Rechnung wurde automatisch generiert am ${new Date().toLocaleDateString('de-CH')} um ${new Date().toLocaleTimeString('de-CH')}.</em>
+        </div>
+    </div>
+</body>
+</html>
+    `
+    
+    // Return HTML with correct headers for PDF viewing/printing
+    return c.html(html, 200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Content-Disposition': `inline; filename="Rechnung_${invoice.invoice_number}.html"`
+    })
+    
+  } catch (error) {
+    console.error('Error generating invoice PDF:', error)
+    return c.json({ error: 'Failed to generate PDF' }, 500)
+  }
+})
+
+// Company Settings API
+app.get('/api/company-settings', async (c) => {
+  try {
+    const settings = await c.env.DB.prepare('SELECT * FROM company_settings LIMIT 1').first()
+    return c.json({ settings: settings || null })
+  } catch (error) {
+    console.error('Error fetching company settings:', error)
+    return c.json({ error: 'Failed to fetch company settings' }, 500)
+  }
+})
+
+app.post('/api/company-settings', async (c) => {
+  try {
+    const data = await c.req.json()
+    
+    // Check if settings exist
+    const existing = await c.env.DB.prepare('SELECT id FROM company_settings LIMIT 1').first()
+    
+    if (existing) {
+      // Update existing settings
+      await c.env.DB.prepare(`
+        UPDATE company_settings SET
+          company_name = ?, address = ?, city = ?, postal_code = ?, country = ?,
+          phone = ?, email = ?, website = ?, tax_number = ?, bank_account = ?,
+          iban = ?, bic_swift = ?, logo_url = ?, default_tax_rate = ?, 
+          default_payment_terms = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(
+        data.company_name, data.address, data.city, data.postal_code, data.country,
+        data.phone, data.email, data.website, data.tax_number, data.bank_account,
+        data.iban, data.bic_swift, data.logo_url, data.default_tax_rate,
+        data.default_payment_terms, existing.id
+      ).run()
+    } else {
+      // Create new settings
+      await c.env.DB.prepare(`
+        INSERT INTO company_settings (
+          company_name, address, city, postal_code, country, phone, email, website,
+          tax_number, bank_account, iban, bic_swift, logo_url, default_tax_rate, default_payment_terms
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(
+        data.company_name, data.address, data.city, data.postal_code, data.country,
+        data.phone, data.email, data.website, data.tax_number, data.bank_account,
+        data.iban, data.bic_swift, data.logo_url, data.default_tax_rate, data.default_payment_terms
+      ).run()
+    }
+    
+    // Fetch updated settings
+    const updated = await c.env.DB.prepare('SELECT * FROM company_settings LIMIT 1').first()
+    return c.json({ settings: updated })
+  } catch (error) {
+    console.error('Error saving company settings:', error)
+    return c.json({ error: 'Failed to save company settings' }, 500)
+  }
+})
+
+// Database status check (migrations handle actual table creation)
 app.get('/api/init-db', async (c) => {
   try {
-    // This will be handled by migrations, but we can use it for testing
-    await c.env.DB.exec(`
-      CREATE TABLE IF NOT EXISTS customers (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        company_name TEXT NOT NULL,
-        contact_person TEXT,
-        email TEXT UNIQUE,
-        phone TEXT,
-        address TEXT,
-        city TEXT,
-        postal_code TEXT,
-        country TEXT DEFAULT 'Switzerland',
-        tax_number TEXT,
-        notes TEXT,
-        hourly_rate DECIMAL(10,2) DEFAULT 0.00,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
-    `)
-    
-    return c.json({ success: true, message: 'Database initialized' })
+    // Simple database connection test
+    const result = await c.env.DB.prepare('SELECT 1 as test').first()
+    return c.json({ success: true, message: 'Database connection successful', data: result })
   } catch (error) {
-    console.error('Error initializing database:', error)
-    return c.json({ error: 'Failed to initialize database' }, 500)
+    console.error('Error checking database:', error)
+    return c.json({ error: 'Database connection failed' }, 500)
+  }
+})
+
+// ==============================================
+// ACCOUNTING MODULE APIs
+// ==============================================
+
+// Accounting Categories API
+app.get('/api/accounting/categories', async (c) => {
+  try {
+    const { results } = await c.env.DB.prepare(`
+      SELECT * FROM accounting_categories 
+      WHERE is_active = 1 
+      ORDER BY type, name
+    `).all()
+    return c.json({ categories: results })
+  } catch (error) {
+    console.error('Error fetching accounting categories:', error)
+    return c.json({ error: 'Failed to fetch categories' }, 500)
+  }
+})
+
+app.post('/api/accounting/categories', async (c) => {
+  try {
+    const data = await c.req.json()
+    
+    const { success, meta } = await c.env.DB.prepare(`
+      INSERT INTO accounting_categories (name, type, color, description, tax_deductible)
+      VALUES (?, ?, ?, ?, ?)
+    `).bind(
+      data.name || '',
+      data.type || 'expense',
+      data.color || '#6b7280',
+      data.description || null,
+      data.tax_deductible ? 1 : 0
+    ).run()
+    
+    if (success) {
+      return c.json({ id: meta.last_row_id, ...data })
+    }
+    throw new Error('Failed to create category')
+  } catch (error) {
+    console.error('Error creating accounting category:', error)
+    return c.json({ error: 'Failed to create category' }, 500)
+  }
+})
+
+// VAT Rates API
+app.get('/api/accounting/vat-rates', async (c) => {
+  try {
+    const { results } = await c.env.DB.prepare(`
+      SELECT * FROM vat_rates 
+      WHERE is_active = 1 
+      ORDER BY country_code, rate_percentage
+    `).all()
+    return c.json({ vatRates: results })
+  } catch (error) {
+    console.error('Error fetching VAT rates:', error)
+    return c.json({ error: 'Failed to fetch VAT rates' }, 500)
+  }
+})
+
+// Accounting Entries API
+app.get('/api/accounting/entries', async (c) => {
+  try {
+    const { results } = await c.env.DB.prepare(`
+      SELECT ae.*, ac.name as category_name, ac.color as category_color,
+             c.company_name as customer_name, p.name as project_name
+      FROM accounting_entries ae
+      LEFT JOIN accounting_categories ac ON ae.category_id = ac.id
+      LEFT JOIN customers c ON ae.customer_id = c.id
+      LEFT JOIN projects p ON ae.project_id = p.id
+      ORDER BY ae.entry_date DESC, ae.created_at DESC
+      LIMIT 100
+    `).all()
+    
+    return c.json({ entries: results })
+  } catch (error) {
+    console.error('Error fetching accounting entries:', error)
+    return c.json({ error: 'Failed to fetch entries' }, 500)
+  }
+})
+
+app.post('/api/accounting/entries', async (c) => {
+  try {
+    const data = await c.req.json()
+    
+    // Calculate VAT amount if not provided
+    const amount = parseFloat(data.amount) || 0
+    const vatRate = parseFloat(data.vat_rate) || 0
+    const vatAmount = data.vat_amount !== undefined ? parseFloat(data.vat_amount) : (amount * vatRate / 100)
+    const totalAmount = data.total_amount !== undefined ? parseFloat(data.total_amount) : (amount + vatAmount)
+    
+    const { success, meta } = await c.env.DB.prepare(`
+      INSERT INTO accounting_entries (
+        entry_type, amount, vat_rate, vat_amount, total_amount, entry_date,
+        description, receipt_number, category_id, customer_id, project_id,
+        receipt_image_url, receipt_ocr_data, qr_template_id, notes, status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      data.entry_type || 'expense',
+      amount,
+      vatRate,
+      vatAmount,
+      totalAmount,
+      data.entry_date || new Date().toISOString().split('T')[0],
+      data.description || '',
+      data.receipt_number || null,
+      data.category_id || null,
+      data.customer_id || null,
+      data.project_id || null,
+      data.receipt_image_url || null,
+      data.receipt_ocr_data ? JSON.stringify(data.receipt_ocr_data) : null,
+      data.qr_template_id || null,
+      data.notes || null,
+      data.status || 'draft'
+    ).run()
+    
+    if (success) {
+      // Fetch the created entry with joined data
+      const entry = await c.env.DB.prepare(`
+        SELECT ae.*, ac.name as category_name, ac.color as category_color,
+               c.company_name as customer_name, p.name as project_name
+        FROM accounting_entries ae
+        LEFT JOIN accounting_categories ac ON ae.category_id = ac.id
+        LEFT JOIN customers c ON ae.customer_id = c.id
+        LEFT JOIN projects p ON ae.project_id = p.id
+        WHERE ae.id = ?
+      `).bind(meta.last_row_id).first()
+      
+      return c.json({ entry })
+    }
+    throw new Error('Failed to create entry')
+  } catch (error) {
+    console.error('Error creating accounting entry:', error)
+    return c.json({ error: 'Failed to create entry' }, 500)
+  }
+})
+
+app.get('/api/accounting/entries/:id', async (c) => {
+  try {
+    const id = c.req.param('id')
+    
+    const entry = await c.env.DB.prepare(`
+      SELECT ae.*, ac.name as category_name, ac.color as category_color,
+             c.company_name as customer_name, p.name as project_name
+      FROM accounting_entries ae
+      LEFT JOIN accounting_categories ac ON ae.category_id = ac.id
+      LEFT JOIN customers c ON ae.customer_id = c.id
+      LEFT JOIN projects p ON ae.project_id = p.id
+      WHERE ae.id = ?
+    `).bind(id).first()
+    
+    if (!entry) {
+      return c.json({ error: 'Entry not found' }, 404)
+    }
+    
+    return c.json({ entry })
+  } catch (error) {
+    console.error('Error fetching accounting entry:', error)
+    return c.json({ error: 'Failed to fetch entry' }, 500)
+  }
+})
+
+app.put('/api/accounting/entries/:id', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const data = await c.req.json()
+    
+    // Calculate VAT amount if not provided
+    const amount = parseFloat(data.amount) || 0
+    const vatRate = parseFloat(data.vat_rate) || 0
+    const vatAmount = data.vat_amount !== undefined ? parseFloat(data.vat_amount) : (amount * vatRate / 100)
+    const totalAmount = data.total_amount !== undefined ? parseFloat(data.total_amount) : (amount + vatAmount)
+    
+    const { success } = await c.env.DB.prepare(`
+      UPDATE accounting_entries SET
+        entry_type = ?, amount = ?, vat_rate = ?, vat_amount = ?, total_amount = ?,
+        entry_date = ?, description = ?, receipt_number = ?, category_id = ?,
+        customer_id = ?, project_id = ?, receipt_image_url = ?, receipt_ocr_data = ?,
+        qr_template_id = ?, notes = ?, status = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(
+      data.entry_type || 'expense',
+      amount,
+      vatRate,
+      vatAmount,
+      totalAmount,
+      data.entry_date || new Date().toISOString().split('T')[0],
+      data.description || '',
+      data.receipt_number || null,
+      data.category_id || null,
+      data.customer_id || null,
+      data.project_id || null,
+      data.receipt_image_url || null,
+      data.receipt_ocr_data ? JSON.stringify(data.receipt_ocr_data) : null,
+      data.qr_template_id || null,
+      data.notes || null,
+      data.status || 'draft',
+      id
+    ).run()
+    
+    if (success) {
+      // Fetch updated entry
+      const entry = await c.env.DB.prepare(`
+        SELECT ae.*, ac.name as category_name, ac.color as category_color,
+               c.company_name as customer_name, p.name as project_name
+        FROM accounting_entries ae
+        LEFT JOIN accounting_categories ac ON ae.category_id = ac.id
+        LEFT JOIN customers c ON ae.customer_id = c.id
+        LEFT JOIN projects p ON ae.project_id = p.id
+        WHERE ae.id = ?
+      `).bind(id).first()
+      
+      return c.json({ entry })
+    }
+    throw new Error('Failed to update entry')
+  } catch (error) {
+    console.error('Error updating accounting entry:', error)
+    return c.json({ error: 'Failed to update entry' }, 500)
+  }
+})
+
+app.delete('/api/accounting/entries/:id', async (c) => {
+  try {
+    const id = c.req.param('id')
+    
+    const { success } = await c.env.DB.prepare('DELETE FROM accounting_entries WHERE id = ?').bind(id).run()
+    
+    if (success) {
+      return c.json({ success: true })
+    }
+    throw new Error('Failed to delete entry')
+  } catch (error) {
+    console.error('Error deleting accounting entry:', error)
+    return c.json({ error: 'Failed to delete entry' }, 500)
+  }
+})
+
+// QR Templates API
+app.get('/api/accounting/qr-templates', async (c) => {
+  try {
+    const { results } = await c.env.DB.prepare(`
+      SELECT qt.*, ac.name as default_category_name, p.name as default_project_name
+      FROM qr_templates qt
+      LEFT JOIN accounting_categories ac ON qt.default_category_id = ac.id
+      LEFT JOIN projects p ON qt.default_project_id = p.id
+      WHERE qt.is_active = 1
+      ORDER BY qt.name
+    `).all()
+    return c.json({ templates: results })
+  } catch (error) {
+    console.error('Error fetching QR templates:', error)
+    return c.json({ error: 'Failed to fetch QR templates' }, 500)
+  }
+})
+
+app.post('/api/accounting/qr-templates', async (c) => {
+  try {
+    const data = await c.req.json()
+    
+    const { success, meta } = await c.env.DB.prepare(`
+      INSERT INTO qr_templates (name, type, description, default_category_id, default_project_id, qr_data)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).bind(
+      data.name || '',
+      data.type || 'standard',
+      data.description || null,
+      data.default_category_id || null,
+      data.default_project_id || null,
+      JSON.stringify(data.qr_data || {})
+    ).run()
+    
+    if (success) {
+      return c.json({ id: meta.last_row_id, ...data })
+    }
+    throw new Error('Failed to create QR template')
+  } catch (error) {
+    console.error('Error creating QR template:', error)
+    return c.json({ error: 'Failed to create QR template' }, 500)
+  }
+})
+
+// Accounting Reports API
+app.get('/api/accounting/reports/summary', async (c) => {
+  try {
+    const year = c.req.query('year') || new Date().getFullYear()
+    
+    // Income summary
+    const incomeResult = await c.env.DB.prepare(`
+      SELECT 
+        SUM(amount) as gross_amount,
+        SUM(vat_amount) as vat_amount,
+        SUM(total_amount) as total_amount,
+        COUNT(*) as count
+      FROM accounting_entries 
+      WHERE entry_type = 'income' 
+        AND status = 'confirmed' 
+        AND strftime('%Y', entry_date) = ?
+    `).bind(year.toString()).first()
+    
+    // Expense summary
+    const expenseResult = await c.env.DB.prepare(`
+      SELECT 
+        SUM(amount) as gross_amount,
+        SUM(vat_amount) as vat_amount,
+        SUM(total_amount) as total_amount,
+        COUNT(*) as count
+      FROM accounting_entries 
+      WHERE entry_type = 'expense' 
+        AND status = 'confirmed' 
+        AND strftime('%Y', entry_date) = ?
+    `).bind(year.toString()).first()
+    
+    // Monthly breakdown
+    const { results: monthlyBreakdown } = await c.env.DB.prepare(`
+      SELECT 
+        strftime('%m', entry_date) as month,
+        entry_type,
+        SUM(amount) as gross_amount,
+        SUM(vat_amount) as vat_amount,
+        SUM(total_amount) as total_amount,
+        COUNT(*) as count
+      FROM accounting_entries 
+      WHERE status = 'confirmed' 
+        AND strftime('%Y', entry_date) = ?
+      GROUP BY strftime('%m', entry_date), entry_type
+      ORDER BY month
+    `).bind(year.toString()).all()
+    
+    return c.json({ 
+      year: parseInt(year),
+      income: incomeResult || { gross_amount: 0, vat_amount: 0, total_amount: 0, count: 0 },
+      expenses: expenseResult || { gross_amount: 0, vat_amount: 0, total_amount: 0, count: 0 },
+      monthlyBreakdown
+    })
+  } catch (error) {
+    console.error('Error generating accounting summary:', error)
+    return c.json({ error: 'Failed to generate summary' }, 500)
+  }
+})
+
+// Mobile Upload Session API
+app.post('/api/accounting/upload-session', async (c) => {
+  try {
+    const data = await c.req.json()
+    const sessionToken = crypto.randomUUID()
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000) // 24 hours
+    
+    const { success } = await c.env.DB.prepare(`
+      INSERT INTO upload_sessions (session_token, qr_template_id, expires_at)
+      VALUES (?, ?, ?)
+    `).bind(
+      sessionToken,
+      data.qr_template_id || null,
+      expiresAt.toISOString()
+    ).run()
+    
+    if (success) {
+      return c.json({ 
+        sessionToken,
+        uploadUrl: `/mobile/upload/${sessionToken}`,
+        expiresAt: expiresAt.toISOString()
+      })
+    }
+    throw new Error('Failed to create upload session')
+  } catch (error) {
+    console.error('Error creating upload session:', error)
+    return c.json({ error: 'Failed to create upload session' }, 500)
+  }
+})
+
+// Generate QR Code for Template
+app.get('/api/accounting/qr-code/:templateId', async (c) => {
+  try {
+    const templateId = c.req.param('templateId')
+    
+    // Get template details
+    const template = await c.env.DB.prepare(`
+      SELECT * FROM qr_templates WHERE id = ? AND is_active = 1
+    `).bind(templateId).first()
+    
+    if (!template) {
+      return c.json({ error: 'Template not found' }, 404)
+    }
+    
+    // Create upload session
+    const sessionToken = crypto.randomUUID()
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000) // 24 hours
+    
+    await c.env.DB.prepare(`
+      INSERT INTO upload_sessions (session_token, qr_template_id, expires_at)
+      VALUES (?, ?, ?)
+    `).bind(sessionToken, templateId, expiresAt.toISOString()).run()
+    
+    // Generate QR code data (URL to mobile upload)
+    const host = c.req.header('host') || 'localhost:3000'
+    const protocol = c.req.header('x-forwarded-proto') || 'http'
+    const mobileUrl = `${protocol}://${host}/mobile/upload/${sessionToken}`
+    
+    return c.json({
+      qrData: mobileUrl,
+      template: template,
+      sessionToken: sessionToken,
+      expiresAt: expiresAt.toISOString()
+    })
+  } catch (error) {
+    console.error('Error generating QR code:', error)
+    return c.json({ error: 'Failed to generate QR code' }, 500)
+  }
+})
+
+// Mobile Upload Interface
+app.get('/mobile/upload/:sessionToken', async (c) => {
+  try {
+    const sessionToken = c.req.param('sessionToken')
+    
+    // Validate session
+    const session = await c.env.DB.prepare(`
+      SELECT us.*, qt.name as template_name, qt.type as template_type, qt.qr_data
+      FROM upload_sessions us
+      LEFT JOIN qr_templates qt ON us.qr_template_id = qt.id
+      WHERE us.session_token = ? AND us.expires_at > datetime('now')
+    `).bind(sessionToken).first()
+    
+    if (!session) {
+      return c.html(`
+        <!DOCTYPE html>
+        <html lang="de">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Session abgelaufen</title>
+            <script src="https://cdn.tailwindcss.com"></script>
+        </head>
+        <body class="bg-red-50 flex items-center justify-center min-h-screen">
+            <div class="text-center">
+                <i class="fas fa-exclamation-triangle text-red-500 text-6xl mb-4"></i>
+                <h1 class="text-2xl font-bold text-red-800 mb-2">Session abgelaufen</h1>
+                <p class="text-red-600">Diese Upload-Session ist ungültig oder abgelaufen.</p>
+            </div>
+        </body>
+        </html>
+      `)
+    }
+    
+    // Return mobile upload interface
+    return c.html(`
+      <!DOCTYPE html>
+      <html lang="de">
+      <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Beleg Upload - ${session.template_name || 'Standard'}</title>
+          <script src="https://cdn.tailwindcss.com"></script>
+          <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
+      </head>
+      <body class="bg-gray-50">
+          <div class="min-h-screen p-4">
+              <div class="max-w-md mx-auto">
+                  <!-- Header -->
+                  <div class="bg-white rounded-lg shadow-sm p-6 mb-6 text-center">
+                      <i class="fas fa-receipt text-green-600 text-3xl mb-3"></i>
+                      <h1 class="text-xl font-bold text-gray-900 mb-2">Beleg Upload</h1>
+                      ${session.template_name ? `<p class="text-sm text-gray-600">Template: ${session.template_name}</p>` : ''}
+                  </div>
+                  
+                  <!-- Upload Form -->
+                  <form id="upload-form" class="space-y-6">
+                      <!-- Camera Capture -->
+                      <div class="bg-white rounded-lg shadow-sm p-6">
+                          <h3 class="text-lg font-semibold mb-4">
+                              <i class="fas fa-camera mr-2 text-blue-600"></i>
+                              Beleg fotografieren
+                          </h3>
+                          
+                          <div class="space-y-4">
+                              <input type="file" id="receipt-image" accept="image/*" capture="environment" 
+                                     class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100" 
+                                     onchange="previewImage(this)" required>
+                              
+                              <div id="image-preview" class="hidden">
+                                  <img id="preview-img" class="w-full rounded-lg border" alt="Beleg Vorschau">
+                                  <button type="button" onclick="clearImage()" class="mt-2 text-sm text-red-600 hover:text-red-800">
+                                      <i class="fas fa-times mr-1"></i>Bild entfernen
+                                  </button>
+                              </div>
+                          </div>
+                      </div>
+                      
+                      <!-- Entry Details -->
+                      <div class="bg-white rounded-lg shadow-sm p-6">
+                          <h3 class="text-lg font-semibold mb-4">
+                              <i class="fas fa-edit mr-2 text-green-600"></i>
+                              Buchungsdetails
+                          </h3>
+                          
+                          <div class="space-y-4">
+                              <div>
+                                  <label class="block text-sm font-medium text-gray-700 mb-1">Betrag *</label>
+                                  <input type="number" id="amount" step="0.01" required 
+                                         class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-green-500 focus:border-green-500"
+                                         placeholder="0.00">
+                              </div>
+                              
+                              <div>
+                                  <label class="block text-sm font-medium text-gray-700 mb-1">Beschreibung *</label>
+                                  <textarea id="description" required rows="3"
+                                            class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-green-500 focus:border-green-500"
+                                            placeholder="Beschreibung der Ausgabe..."></textarea>
+                              </div>
+                              
+                              <div>
+                                  <label class="block text-sm font-medium text-gray-700 mb-1">Datum</label>
+                                  <input type="date" id="entry-date" 
+                                         class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-green-500 focus:border-green-500"
+                                         value="${new Date().toISOString().split('T')[0]}">
+                              </div>
+                              
+                              <div>
+                                  <label class="block text-sm font-medium text-gray-700 mb-1">Belegnummer</label>
+                                  <input type="text" id="receipt-number"
+                                         class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-green-500 focus:border-green-500"
+                                         placeholder="Optional">
+                              </div>
+                              
+                              <div>
+                                  <label class="block text-sm font-medium text-gray-700 mb-1">Notizen</label>
+                                  <textarea id="notes" rows="2"
+                                            class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-green-500 focus:border-green-500"
+                                            placeholder="Zusätzliche Notizen..."></textarea>
+                              </div>
+                          </div>
+                      </div>
+                      
+                      <!-- Submit Button -->
+                      <button type="submit" class="w-full bg-green-600 hover:bg-green-700 text-white font-semibold py-3 px-4 rounded-lg">
+                          <i class="fas fa-cloud-upload-alt mr-2"></i>
+                          Beleg hochladen
+                      </button>
+                  </form>
+                  
+                  <!-- Success Message -->
+                  <div id="success-message" class="hidden bg-white rounded-lg shadow-sm p-6 text-center">
+                      <i class="fas fa-check-circle text-green-600 text-4xl mb-3"></i>
+                      <h3 class="text-lg font-semibold text-gray-900 mb-2">Upload erfolgreich!</h3>
+                      <p class="text-gray-600 mb-4">Ihr Beleg wurde erfolgreich hochgeladen und wird in der Buchhaltung angezeigt.</p>
+                      <button onclick="location.reload()" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg">
+                          Weiteren Beleg hochladen
+                      </button>
+                  </div>
+              </div>
+          </div>
+          
+          <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
+          <script>
+              function previewImage(input) {
+                  if (input.files && input.files[0]) {
+                      const reader = new FileReader();
+                      reader.onload = function(e) {
+                          document.getElementById('preview-img').src = e.target.result;
+                          document.getElementById('image-preview').classList.remove('hidden');
+                      };
+                      reader.readAsDataURL(input.files[0]);
+                  }
+              }
+              
+              function clearImage() {
+                  document.getElementById('receipt-image').value = '';
+                  document.getElementById('image-preview').classList.add('hidden');
+              }
+              
+              document.getElementById('upload-form').addEventListener('submit', async function(e) {
+                  e.preventDefault();
+                  
+                  const formData = new FormData();
+                  const imageFile = document.getElementById('receipt-image').files[0];
+                  
+                  if (!imageFile) {
+                      alert('Bitte wählen Sie ein Bild aus.');
+                      return;
+                  }
+                  
+                  // Convert image to base64 for storage
+                  const reader = new FileReader();
+                  reader.onload = async function(e) {
+                      const imageData = e.target.result;
+                      
+                      const entryData = {
+                          entry_type: 'expense',
+                          amount: parseFloat(document.getElementById('amount').value),
+                          entry_date: document.getElementById('entry-date').value,
+                          description: document.getElementById('description').value,
+                          receipt_number: document.getElementById('receipt-number').value || null,
+                          notes: document.getElementById('notes').value || null,
+                          receipt_image_url: imageData,
+                          qr_template_id: ${session.qr_template_id || 'null'},
+                          status: 'draft'
+                      };
+                      
+                      try {
+                          await axios.post('/api/accounting/entries', entryData);
+                          
+                          // Show success message
+                          document.getElementById('upload-form').classList.add('hidden');
+                          document.getElementById('success-message').classList.remove('hidden');
+                          
+                      } catch (error) {
+                          console.error('Upload error:', error);
+                          alert('Fehler beim Upload. Bitte versuchen Sie es erneut.');
+                      }
+                  };
+                  
+                  reader.readAsDataURL(imageFile);
+              });
+          </script>
+      </body>
+      </html>
+    `)
+  } catch (error) {
+    console.error('Error loading mobile upload:', error)
+    return c.html(`
+      <!DOCTYPE html>
+      <html><body><h1>Error loading upload interface</h1></body></html>
+    `)
   }
 })
 
@@ -876,6 +1880,12 @@ app.get('/', (c) => {
                     </button>
                     <button class="tab" onclick="showTab('quotes')">
                         <i class="fas fa-file-contract mr-2"></i>Angebote
+                    </button>
+                    <button class="tab" onclick="showTab('accounting')">
+                        <i class="fas fa-calculator mr-2"></i>Buchhaltung
+                    </button>
+                    <button class="tab" onclick="showTab('settings')">
+                        <i class="fas fa-cog mr-2"></i>Einstellungen
                     </button>
                 </div>
             </div>
@@ -1119,6 +2129,338 @@ app.get('/', (c) => {
                             <tbody id="quotes-table" class="bg-white divide-y divide-gray-200">
                                 <!-- Will be populated by JavaScript --></tbody>
                         </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Accounting Tab -->
+            <div id="accounting" class="tab-content hidden">
+                <div class="flex justify-between items-center mb-6">
+                    <h2 class="text-2xl font-bold text-gray-900">
+                        <i class="fas fa-calculator mr-3 text-green-600"></i>
+                        Buchhaltung
+                    </h2>
+                    <div class="space-x-2">
+                        <button onclick="showQRTemplatesModal()" class="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg">
+                            <i class="fas fa-qrcode mr-2"></i>QR-Codes
+                        </button>
+                        <button onclick="showAccountingEntryModal()" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg">
+                            <i class="fas fa-plus mr-2"></i>Neue Buchung
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- Accounting Summary Cards -->
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                    <div class="bg-white rounded-lg shadow p-6">
+                        <div class="flex items-center">
+                            <div class="flex-shrink-0">
+                                <i class="fas fa-arrow-up text-green-600 text-2xl"></i>
+                            </div>
+                            <div class="ml-4">
+                                <p class="text-sm font-medium text-gray-600">Einnahmen (Jahr)</p>
+                                <p id="total-income" class="text-2xl font-bold text-gray-900">0.00 CHF</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="bg-white rounded-lg shadow p-6">
+                        <div class="flex items-center">
+                            <div class="flex-shrink-0">
+                                <i class="fas fa-arrow-down text-red-600 text-2xl"></i>
+                            </div>
+                            <div class="ml-4">
+                                <p class="text-sm font-medium text-gray-600">Ausgaben (Jahr)</p>
+                                <p id="total-expenses" class="text-2xl font-bold text-gray-900">0.00 CHF</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="bg-white rounded-lg shadow p-6">
+                        <div class="flex items-center">
+                            <div class="flex-shrink-0">
+                                <i class="fas fa-balance-scale text-blue-600 text-2xl"></i>
+                            </div>
+                            <div class="ml-4">
+                                <p class="text-sm font-medium text-gray-600">Gewinn/Verlust</p>
+                                <p id="net-profit" class="text-2xl font-bold text-gray-900">0.00 CHF</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="bg-white rounded-lg shadow p-6">
+                        <div class="flex items-center">
+                            <div class="flex-shrink-0">
+                                <i class="fas fa-percentage text-orange-600 text-2xl"></i>
+                            </div>
+                            <div class="ml-4">
+                                <p class="text-sm font-medium text-gray-600">MwSt. geschuldet</p>
+                                <p id="vat-owed" class="text-2xl font-bold text-gray-900">0.00 CHF</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Filters and Controls -->
+                <div class="bg-white rounded-lg shadow p-4 mb-6">
+                    <div class="flex flex-wrap items-center gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Jahr</label>
+                            <select id="accounting-year-filter" class="px-3 py-2 border border-gray-300 rounded-md text-sm" onchange="loadAccountingData()">
+                                <option value="2025">2025</option>
+                                <option value="2024">2024</option>
+                                <option value="2023">2023</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Typ</label>
+                            <select id="accounting-type-filter" class="px-3 py-2 border border-gray-300 rounded-md text-sm" onchange="loadAccountingEntries()">
+                                <option value="">Alle</option>
+                                <option value="income">Einnahmen</option>
+                                <option value="expense">Ausgaben</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Kategorie</label>
+                            <select id="accounting-category-filter" class="px-3 py-2 border border-gray-300 rounded-md text-sm" onchange="loadAccountingEntries()">
+                                <option value="">Alle Kategorien</option>
+                                <!-- Will be populated by JavaScript -->
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Status</label>
+                            <select id="accounting-status-filter" class="px-3 py-2 border border-gray-300 rounded-md text-sm" onchange="loadAccountingEntries()">
+                                <option value="">Alle</option>
+                                <option value="draft">Entwurf</option>
+                                <option value="confirmed">Bestätigt</option>
+                                <option value="reconciled">Abgestimmt</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Accounting Entries Table -->
+                <div class="bg-white shadow rounded-lg">
+                    <div class="px-6 py-4 border-b border-gray-200">
+                        <h3 class="text-lg font-medium text-gray-900">Buchungen</h3>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Datum</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Typ</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Beschreibung</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Kategorie</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Betrag</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">MwSt</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Aktionen</th>
+                                </tr>
+                            </thead>
+                            <tbody id="accounting-entries-table" class="bg-white divide-y divide-gray-200">
+                                <!-- Will be populated by JavaScript -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Settings Tab -->
+            <div id="settings" class="tab-content hidden">
+                <div class="flex justify-between items-center mb-6">
+                    <h2 class="text-2xl font-bold text-gray-900">
+                        <i class="fas fa-cog mr-3 text-gray-600"></i>
+                        Firmeneinstellungen
+                    </h2>
+                    <button onclick="saveCompanySettings()" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg">
+                        <i class="fas fa-save mr-2"></i>Einstellungen speichern
+                    </button>
+                </div>
+                
+                <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                    <!-- Company Information -->
+                    <div class="bg-white shadow rounded-lg p-6">
+                        <h3 class="text-lg font-medium text-gray-900 mb-4">
+                            <i class="fas fa-building mr-2 text-blue-600"></i>
+                            Firmendaten
+                        </h3>
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Firmenname *</label>
+                                <input type="text" id="company_name" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="Ihre Firma AG">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Adresse</label>
+                                <input type="text" id="company_address" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="Musterstrasse 123">
+                            </div>
+                            <div class="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700">PLZ</label>
+                                    <input type="text" id="company_postal_code" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="8001">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700">Stadt</label>
+                                    <input type="text" id="company_city" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="Zürich">
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Land</label>
+                                <input type="text" id="company_country" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" value="Schweiz">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Contact Information -->
+                    <div class="bg-white shadow rounded-lg p-6">
+                        <h3 class="text-lg font-medium text-gray-900 mb-4">
+                            <i class="fas fa-phone mr-2 text-green-600"></i>
+                            Kontaktdaten
+                        </h3>
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Telefon</label>
+                                <input type="text" id="company_phone" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="+41 44 123 45 67">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">E-Mail</label>
+                                <input type="email" id="company_email" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="info@ihrefirma.ch">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Website</label>
+                                <input type="url" id="company_website" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="https://www.ihrefirma.ch">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Firmenlogo</label>
+                                <div class="mt-1 space-y-3">
+                                    <!-- Logo Upload -->
+                                    <div class="flex items-center space-x-4">
+                                        <input type="file" id="company_logo_file" accept="image/*" class="hidden" onchange="handleLogoUpload(event)">
+                                        <button type="button" onclick="document.getElementById('company_logo_file').click()" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md text-sm">
+                                            <i class="fas fa-upload mr-2"></i>Logo hochladen
+                                        </button>
+                                        <span class="text-xs text-gray-500">PNG, JPG, SVG (max. 2MB)</span>
+                                    </div>
+                                    
+                                    <!-- Current Logo Preview -->
+                                    <div id="logo-preview-container" class="hidden">
+                                        <div class="flex items-center space-x-4 p-3 bg-gray-50 rounded-md border">
+                                            <img id="logo-preview-image" src="" alt="Logo Vorschau" class="h-12 max-w-32 object-contain">
+                                            <div class="flex-1">
+                                                <p class="text-sm font-medium text-gray-900">Aktuelles Logo</p>
+                                                <p class="text-xs text-gray-500">Wird in Rechnungen verwendet</p>
+                                            </div>
+                                            <button type="button" onclick="removeLogo()" class="text-red-600 hover:text-red-800 p-1" title="Logo entfernen">
+                                                <i class="fas fa-trash text-sm"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- Alternative URL Input -->
+                                    <details class="mt-2">
+                                        <summary class="text-xs text-gray-500 cursor-pointer hover:text-gray-700">
+                                            <i class="fas fa-link mr-1"></i>Alternativ: Logo-URL eingeben
+                                        </summary>
+                                        <div class="mt-2">
+                                            <input type="url" id="company_logo_url" class="block w-full px-3 py-2 border border-gray-300 rounded-md text-sm" placeholder="https://www.ihrefirma.ch/logo.png">
+                                            <p class="mt-1 text-xs text-gray-500">Falls Sie eine externe URL verwenden möchten</p>
+                                        </div>
+                                    </details>
+                                </div>
+                                
+                                <!-- Hidden field for base64 data -->
+                                <input type="hidden" id="company_logo_base64" value="">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Financial Information -->
+                    <div class="bg-white shadow rounded-lg p-6">
+                        <h3 class="text-lg font-medium text-gray-900 mb-4">
+                            <i class="fas fa-university mr-2 text-yellow-600"></i>
+                            Finanz- & Steuerdaten
+                        </h3>
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">IBAN</label>
+                                <input type="text" id="company_iban" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="CH93 0076 2011 6238 5295 7">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Bank/Kontoinhaber</label>
+                                <input type="text" id="company_bank_account" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="UBS Schweiz AG">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">BIC/SWIFT</label>
+                                <input type="text" id="company_bic_swift" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="UBSWCHZH80A">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Steuernummer</label>
+                                <input type="text" id="company_tax_number" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="CHE-123.456.789 MWST">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Default Settings -->
+                    <div class="bg-white shadow rounded-lg p-6">
+                        <h3 class="text-lg font-medium text-gray-900 mb-4">
+                            <i class="fas fa-cogs mr-2 text-purple-600"></i>
+                            Standard-Einstellungen
+                        </h3>
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Standard MwSt.-Satz (%)</label>
+                                <input type="number" id="company_default_tax_rate" step="0.1" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" value="8.1">
+                                <p class="mt-1 text-xs text-gray-500">Wird für neue Rechnungen verwendet</p>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700">Standard Zahlungsbedingungen</label>
+                                <input type="text" id="company_default_payment_terms" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" value="30 Tage">
+                                <p class="mt-1 text-xs text-gray-500">z.B. "30 Tage", "Sofort", "14 Tage netto"</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Preview Section -->
+                <div class="mt-8 bg-white shadow rounded-lg p-6">
+                    <h3 class="text-lg font-medium text-gray-900 mb-4">
+                        <i class="fas fa-eye mr-2 text-indigo-600"></i>
+                        Vorschau: So erscheinen Ihre Daten auf Rechnungen
+                    </h3>
+                    <div class="border border-gray-200 rounded-lg p-6 bg-gray-50">
+                        <div class="flex justify-between items-start mb-6">
+                            <div id="preview-logo" class="flex items-center">
+                                <!-- Logo will be inserted here -->
+                                <span class="text-gray-400 italic">Logo wird hier angezeigt</span>
+                            </div>
+                            <div class="text-right">
+                                <h4 class="text-xl font-bold">RECHNUNG</h4>
+                                <p class="text-sm text-gray-600">RE-2025-XXX</p>
+                            </div>
+                        </div>
+                        
+                        <div class="border-t pt-6 mt-6">
+                            <div class="grid grid-cols-3 gap-6 text-sm">
+                                <div>
+                                    <h5 class="font-semibold mb-2">Rechnungssteller:</h5>
+                                    <div id="preview-company-info">
+                                        <p class="text-gray-400 italic">Firmendaten werden hier angezeigt</p>
+                                    </div>
+                                </div>
+                                <div>
+                                    <h5 class="font-semibold mb-2">Kontakt:</h5>
+                                    <div id="preview-contact-info">
+                                        <p class="text-gray-400 italic">Kontaktdaten werden hier angezeigt</p>
+                                    </div>
+                                </div>
+                                <div>
+                                    <h5 class="font-semibold mb-2">Banking:</h5>
+                                    <div id="preview-banking-info">
+                                        <p class="text-gray-400 italic">Bankdaten werden hier angezeigt</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>

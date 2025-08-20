@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Invoice Debug</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
+</head>
+<body class="p-8">
+    <h1 class="text-2xl font-bold mb-4">Debug Invoice Editing</h1>
+    
+    <button onclick="testInvoiceLoading()" class="bg-blue-500 text-white px-4 py-2 rounded mb-4">
+        Test Loading Invoice 1
+    </button>
+    
+    <div id="debug-output" class="bg-gray-100 p-4 rounded">
+        <h2 class="font-bold">Debug Output:</h2>
+        <pre id="debug-content"></pre>
+    </div>
+
+    <script>
+        async function testInvoiceLoading() {
+            const debugContent = document.getElementById('debug-content');
+            
+            try {
+                console.log('Loading invoice 1...');
+                const response = await axios.get('/api/invoices/1');
+                console.log('Response:', response.data);
+                
+                const invoice = response.data.invoice;
+                const items = response.data.items || [];
+                
+                debugContent.textContent = `
+Invoice Data:
+- ID: ${invoice.id}
+- Number: ${invoice.invoice_number}
+- Customer: ${invoice.company_name}
+- Items Count: ${items.length}
+
+Items:
+${items.map((item, index) => `
+${index + 1}. ${item.description}
+   Quantity: ${item.quantity}
+   Unit Price: ${item.unit_price}
+   Total: ${item.total}
+`).join('')}
+
+Test addInvoiceItem with existing data:
+`;
+                
+                // Test if we can access the addInvoiceItem function structure
+                console.log('Items to load:', items);
+                items.forEach((item, index) => {
+                    console.log(`Item ${index + 1}:`, item);
+                });
+                
+            } catch (error) {
+                console.error('Error:', error);
+                debugContent.textContent = `Error: ${error.message}`;
+            }
+        }
+    </script>
+</body>
+</html>
