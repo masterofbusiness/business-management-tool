@@ -6,6 +6,8 @@
 - **Features**: Kundenstamm, Zeiterfassung mit Timer, Projektverwaltung, Rechnungserstellung, Angebotserstellung, **Vollständige Buchhaltung mit Mobile QR-Upload**
 
 ## URLs
+- **🌐 LIVE PRODUCTION**: https://business-management-tool.pages.dev
+- **GitHub Repository**: https://github.com/masterofbusiness/business-management-tool
 - **Lokale Entwicklung**: https://3000-imcwy1rf2rqoa9ixk3xzy-6532622b.e2b.dev
 - **API Endpunkte**:
   - `/api/customers` - Kundenverwaltung (GET, POST, PUT, DELETE)
@@ -233,10 +235,12 @@
 
 ## Deployment
 - **Platform**: Cloudflare Pages (für Produktion)
-- **Status**: ✅ Aktiv in Entwicklungsumgebung
+- **Status**: ✅ **LIVE PRODUCTION** - https://business-management-tool.pages.dev
 - **Tech Stack**: Hono + TypeScript + Tailwind CSS + D1 Database
+- **Database**: Cloudflare D1 (Production database mit Migrations)
+- **GitHub**: Automatische Synchronisation mit Repository
 - **Lokaler Server**: PM2 mit wrangler pages dev
-- **Last Updated**: 15. August 2025
+- **Last Updated**: 20. August 2025
 
 ## Development
 
@@ -319,6 +323,13 @@ Das Tool ist **vollständig produktionsreif** für alle Kern-Geschäftsprozesse:
 - **Vollständiger PDF-Export implementiert**: Schweizer Rechnungsformat mit Ein-Klick-Export
 - **Rechnungsvorschau hinzugefügt**: Formatierte Anzeige vor dem Export
 - **Print-Integration**: Automatischer Print-Dialog beim PDF-Export
+
+### 🆕 **CUSTOMER DROPDOWN & PDF EXPORT FIXES (20.08.2025)**
+- **Customer Dropdown Fix**: Kundennamen werden jetzt korrekt in allen Dropdown-Feldern angezeigt
+- **PDF Export Overhaul**: Vollständige Überarbeitung der PDF-Generierung für konsistente Darstellung
+- **Header/Footer Fix**: PDF-Export zeigt jetzt korrekt Header und Footer wie in Vorschau
+- **Print-Optimized Styles**: Umfassende CSS-Klassen für druckoptimierte Layouts
+- **Consistent Rendering**: PDF-Ausgabe stimmt nun exakt mit Vorschau überein
 
 ### 🆕 **BUCHHALTUNGSMODUL KOMPLETT IMPLEMENTIERT (20.08.2025)**
 - **Vollständige Buchhaltungslösung** mit Einnahmen-/Ausgaben-Erfassung
