@@ -48,7 +48,23 @@ app.get('/api/customers', async (c) => {
 
 app.post('/api/customers', async (c) => {
   try {
+    // Debug: Check if database is available
+    if (!c.env.DB) {
+      console.error('Database not bound!')
+      return c.json({ error: 'Database not available - check D1 binding' }, 500)
+    }
+
     const data = await c.req.json()
+    console.log('Creating customer with data:', data)
+    
+    // Test database connection first
+    try {
+      await c.env.DB.prepare('SELECT 1 as test').first()
+    } catch (dbError) {
+      console.error('Database connection failed:', dbError)
+      return c.json({ error: 'Database connection failed', details: dbError.message }, 500)
+    }
+
     const { success, meta } = await c.env.DB.prepare(`
       INSERT INTO customers (company_name, contact_person, email, phone, address, city, postal_code, country, tax_number, hourly_rate, notes)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -67,12 +83,17 @@ app.post('/api/customers', async (c) => {
     ).run()
 
     if (success) {
+      console.log('Customer created successfully:', meta.last_row_id)
       return c.json({ id: meta.last_row_id, ...data })
     }
     throw new Error('Failed to create customer')
   } catch (error) {
     console.error('Error creating customer:', error)
-    return c.json({ error: 'Failed to create customer' }, 500)
+    return c.json({ 
+      error: 'Failed to create customer', 
+      details: error.message,
+      hasDB: !!c.env.DB 
+    }, 500)
   }
 })
 
