@@ -15,6 +15,7 @@ document.addEventListener('DOMContentLoaded', function() {
     loadDashboard();
     initializeDatabase();
     loadCompanySettings();
+    loadCustomers(); // Load customers on app start for dropdowns
 });
 
 // Tab management
@@ -45,12 +46,16 @@ function showTab(tabName) {
             loadCustomers();
             break;
         case 'timetracking':
+            loadCustomers();
+            loadProjects();
             loadTimeEntries();
             break;
         case 'projects':
+            loadCustomers();
             loadProjects();
             break;
         case 'invoices':
+            loadCustomers();
             loadInvoices();
             break;
         case 'quotes':
@@ -172,10 +177,32 @@ async function loadCustomers() {
         const response = await axios.get('/api/customers');
         currentCustomers = response.data.customers || [];
         renderCustomersTable();
+        updateCustomerDropdowns(); // Update all customer dropdowns
     } catch (error) {
         console.error('Error loading customers:', error);
         currentCustomers = [];
     }
+}
+
+// Update all customer dropdowns in the current page
+function updateCustomerDropdowns() {
+    const customerSelects = [
+        'customer_id',           // Time entry modal
+        'project_customer_id',   // Project modal
+        'invoice_customer_id',   // Invoice modal
+        'quote_customer_id'      // Quote modal
+    ];
+    
+    customerSelects.forEach(selectId => {
+        const select = document.getElementById(selectId);
+        if (select) {
+            const currentValue = select.value;
+            select.innerHTML = '<option value="">Kunde auswählen</option>' + 
+                currentCustomers.map(customer => 
+                    `<option value="${customer.id}" ${currentValue == customer.id ? 'selected' : ''}>${customer.company_name}</option>`
+                ).join('');
+        }
+    });
 }
 
 function renderCustomersTable() {
@@ -1547,55 +1574,55 @@ async function generateInvoicePDF(id) {
         
         // Create professional PDF content with company settings
         const pdfContent = `
-            <div style="font-family: 'Helvetica', Arial, sans-serif; padding: 0; max-width: 210mm; margin: 0 auto;">
+            <div style="max-width: 210mm; margin: 0 auto;">
                 <!-- Header with Logo -->
-                <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 40px; border-bottom: 2px solid #e5e7eb; padding-bottom: 20px;">
-                    <div style="display: flex; align-items: start; gap: 20px;">
-                        ${companySettings.logo_url ? `<img src="${companySettings.logo_url}" alt="Logo" style="max-height: 60px; max-width: 200px; object-fit: contain;">` : ''}
+                <div class="flex justify-between align-start mb-40 border-bottom pb-20">
+                    <div class="flex align-start" style="gap: 20px;">
+                        ${companySettings.logo_url ? `<img src="${companySettings.logo_url}" alt="Logo">` : ''}
                         <div>
-                            <h1 style="font-size: 28px; font-weight: bold; color: #1f2937; margin: 0 0 10px 0;">RECHNUNG</h1>
-                            <p style="font-size: 18px; font-weight: 600; color: #374151; margin: 0;">${invoice.invoice_number}</p>
+                            <h1 class="text-28 bold text-gray-900 m-0 mb-10">RECHNUNG</h1>
+                            <p class="text-18 semibold text-gray-800 m-0">${invoice.invoice_number}</p>
                         </div>
                     </div>
-                    <div style="text-align: right; font-size: 12px; color: #6b7280;">
-                        <p style="margin: 0 0 5px 0;"><strong>Rechnungsdatum:</strong> ${new Date(invoice.issue_date).toLocaleDateString('de-CH')}</p>
-                        ${invoice.due_date ? `<p style="margin: 0 0 5px 0;"><strong>Fälligkeitsdatum:</strong> ${new Date(invoice.due_date).toLocaleDateString('de-CH')}</p>` : ''}
-                        <p style="margin: 0;"><strong>Status:</strong> ${getInvoiceStatusText(invoice.status)}</p>
+                    <div class="text-right text-12 text-gray-600">
+                        <p class="m-0 mb-5"><strong>Rechnungsdatum:</strong> ${new Date(invoice.issue_date).toLocaleDateString('de-CH')}</p>
+                        ${invoice.due_date ? `<p class="m-0 mb-5"><strong>Fälligkeitsdatum:</strong> ${new Date(invoice.due_date).toLocaleDateString('de-CH')}</p>` : ''}
+                        <p class="m-0"><strong>Status:</strong> ${getInvoiceStatusText(invoice.status)}</p>
                     </div>
                 </div>
                 
                 <!-- Customer Address -->
-                <div style="margin-bottom: 40px;">
-                    <h3 style="font-size: 16px; font-weight: 600; margin-bottom: 15px; color: #374151;">Rechnungsadresse:</h3>
-                    <div style="background-color: #f9fafb; padding: 20px; border-radius: 8px; border-left: 4px solid #3b82f6;">
-                        <p style="font-weight: 600; margin: 0 0 5px 0; font-size: 16px;">${invoice.company_name}</p>
-                        ${invoice.contact_person ? `<p style="margin: 0 0 5px 0;">${invoice.contact_person}</p>` : ''}
-                        ${invoice.address ? `<p style="margin: 0 0 5px 0;">${invoice.address}</p>` : ''}
-                        ${invoice.postal_code && invoice.city ? `<p style="margin: 0 0 5px 0;">${invoice.postal_code} ${invoice.city}</p>` : ''}
-                        ${invoice.country ? `<p style="margin: 0 0 10px 0;">${invoice.country}</p>` : ''}
-                        ${invoice.email ? `<p style="margin: 0; color: #6b7280; font-size: 14px;"><strong>E-Mail:</strong> ${invoice.email}</p>` : ''}
+                <div class="mb-40">
+                    <h3 class="text-16 semibold mb-15 text-gray-800">Rechnungsadresse:</h3>
+                    <div class="customer-box">
+                        <p class="semibold m-0 mb-5 text-16">${invoice.company_name}</p>
+                        ${invoice.contact_person ? `<p class="m-0 mb-5">${invoice.contact_person}</p>` : ''}
+                        ${invoice.address ? `<p class="m-0 mb-5">${invoice.address}</p>` : ''}
+                        ${invoice.postal_code && invoice.city ? `<p class="m-0 mb-5">${invoice.postal_code} ${invoice.city}</p>` : ''}
+                        ${invoice.country ? `<p class="m-0 mb-10">${invoice.country}</p>` : ''}
+                        ${invoice.email ? `<p class="m-0 text-gray-600"><strong>E-Mail:</strong> ${invoice.email}</p>` : ''}
                     </div>
                 </div>
                 
                 <!-- Items Table -->
-                <div style="margin-bottom: 40px;">
-                    <h3 style="font-size: 16px; font-weight: 600; margin-bottom: 15px; color: #374151;">Rechnungsposten:</h3>
-                    <table style="width: 100%; border-collapse: collapse; border: 1px solid #d1d5db; border-radius: 8px; overflow: hidden;">
+                <div class="mb-40">
+                    <h3 class="text-16 semibold mb-15 text-gray-800">Rechnungsposten:</h3>
+                    <table>
                         <thead>
-                            <tr style="background-color: #f3f4f6;">
-                                <th style="border-right: 1px solid #d1d5db; padding: 12px; text-align: left; font-weight: 600; color: #374151;">Beschreibung</th>
-                                <th style="border-right: 1px solid #d1d5db; padding: 12px; text-align: center; font-weight: 600; color: #374151; width: 80px;">Menge</th>
-                                <th style="border-right: 1px solid #d1d5db; padding: 12px; text-align: right; font-weight: 600; color: #374151; width: 100px;">Einzelpreis</th>
-                                <th style="padding: 12px; text-align: right; font-weight: 600; color: #374151; width: 100px;">Summe</th>
+                            <tr class="bg-header">
+                                <th style="text-align: left;">Beschreibung</th>
+                                <th style="text-align: center; width: 80px;">Menge</th>
+                                <th style="text-align: right; width: 100px;">Einzelpreis</th>
+                                <th style="border-right: none; text-align: right; width: 100px;">Summe</th>
                             </tr>
                         </thead>
                         <tbody>
                             ${items.map((item, index) => `
-                                <tr style="background-color: ${index % 2 === 0 ? '#ffffff' : '#f9fafb'};">
-                                    <td style="border-right: 1px solid #e5e7eb; ${index < items.length - 1 ? 'border-bottom: 1px solid #e5e7eb;' : ''} padding: 12px; color: #374151;">${item.description}</td>
-                                    <td style="border-right: 1px solid #e5e7eb; ${index < items.length - 1 ? 'border-bottom: 1px solid #e5e7eb;' : ''} padding: 12px; text-align: center; color: #374151;">${item.quantity}</td>
-                                    <td style="border-right: 1px solid #e5e7eb; ${index < items.length - 1 ? 'border-bottom: 1px solid #e5e7eb;' : ''} padding: 12px; text-align: right; color: #374151;">${formatCurrency(item.unit_price)}</td>
-                                    <td style="${index < items.length - 1 ? 'border-bottom: 1px solid #e5e7eb;' : ''} padding: 12px; text-align: right; font-weight: 600; color: #1f2937;">${formatCurrency(item.total)}</td>
+                                <tr class="${index % 2 === 0 ? 'table-row-even' : 'table-row-odd'}">
+                                    <td class="text-gray-800">${item.description}</td>
+                                    <td class="text-center text-gray-800">${item.quantity}</td>
+                                    <td class="text-right text-gray-800">${formatCurrency(item.unit_price)}</td>
+                                    <td class="text-right semibold text-gray-900" style="border-right: none;">${formatCurrency(item.total)}</td>
                                 </tr>
                             `).join('')}
                         </tbody>
@@ -1603,18 +1630,18 @@ async function generateInvoicePDF(id) {
                 </div>
                 
                 <!-- Totals -->
-                <div style="display: flex; justify-content: flex-end; margin-bottom: 40px;">
-                    <div style="width: 300px; background-color: #f9fafb; padding: 20px; border-radius: 8px; border: 1px solid #e5e7eb;">
-                        <div style="display: flex; justify-content: space-between; margin-bottom: 10px; color: #374151;">
+                <div class="flex justify-end mb-40">
+                    <div class="totals-box">
+                        <div class="flex justify-between mb-10 text-gray-800">
                             <span>Zwischensumme:</span>
-                            <span style="font-weight: 600;">${formatCurrency(subtotal)}</span>
+                            <span class="semibold">${formatCurrency(subtotal)}</span>
                         </div>
-                        <div style="display: flex; justify-content: space-between; margin-bottom: 15px; color: #374151;">
+                        <div class="flex justify-between mb-15 text-gray-800">
                             <span>MwSt. (${invoice.tax_rate}%):</span>
-                            <span style="font-weight: 600;">${formatCurrency(taxAmount)}</span>
+                            <span class="semibold">${formatCurrency(taxAmount)}</span>
                         </div>
                         <hr style="margin: 15px 0; border: 1px solid #374151;">
-                        <div style="display: flex; justify-content: space-between; font-size: 18px; font-weight: bold; color: #1f2937;">
+                        <div class="flex justify-between text-18 bold text-gray-900">
                             <span>Gesamtbetrag:</span>
                             <span>${formatCurrency(totalAmount)}</span>
                         </div>
@@ -1623,39 +1650,39 @@ async function generateInvoicePDF(id) {
                 
                 <!-- Payment Terms & Notes -->
                 ${(invoice.payment_terms || invoice.notes) ? `
-                <div style="border-top: 1px solid #e5e7eb; padding-top: 20px; margin-bottom: 30px; font-size: 12px; color: #6b7280;">
-                    ${invoice.payment_terms ? `<p style="margin: 0 0 10px 0;"><strong>Zahlungsbedingungen:</strong> ${invoice.payment_terms}</p>` : ''}
-                    ${invoice.notes ? `<p style="margin: 0 0 10px 0;"><strong>Notizen:</strong> ${invoice.notes}</p>` : ''}
+                <div class="border-top-thin pt-20 mb-30 text-12 text-gray-600">
+                    ${invoice.payment_terms ? `<p class="m-0 mb-10"><strong>Zahlungsbedingungen:</strong> ${invoice.payment_terms}</p>` : ''}
+                    ${invoice.notes ? `<p class="m-0 mb-10"><strong>Notizen:</strong> ${invoice.notes}</p>` : ''}
                 </div>
                 ` : ''}
                 
                 <!-- Professional Footer with Company Info -->
                 ${companySettings.company_name ? `
-                <div style="border-top: 2px solid #d1d5db; padding-top: 20px; margin-top: 30px;">
-                    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; font-size: 10px; color: #6b7280;">
+                <div class="border-top pt-20 mt-30">
+                    <div class="grid grid-3-cols gap-20 text-10 text-gray-600">
                         <div>
-                            <h5 style="font-weight: 600; color: #374151; margin: 0 0 8px 0; font-size: 11px;">Rechnungssteller</h5>
-                            <p style="font-weight: 600; color: #1f2937; margin: 0 0 3px 0;">${companySettings.company_name}</p>
-                            ${companySettings.address ? `<p style="margin: 0 0 2px 0;">${companySettings.address}</p>` : ''}
-                            ${companySettings.postal_code && companySettings.city ? `<p style="margin: 0 0 2px 0;">${companySettings.postal_code} ${companySettings.city}</p>` : ''}
-                            ${companySettings.country ? `<p style="margin: 0;">${companySettings.country}</p>` : ''}
+                            <h5 class="semibold text-gray-800 m-0 text-11" style="margin-bottom: 8px;">Rechnungssteller</h5>
+                            <p class="semibold text-gray-900 m-0" style="margin-bottom: 3px;">${companySettings.company_name}</p>
+                            ${companySettings.address ? `<p class="m-0" style="margin-bottom: 2px;">${companySettings.address}</p>` : ''}
+                            ${companySettings.postal_code && companySettings.city ? `<p class="m-0" style="margin-bottom: 2px;">${companySettings.postal_code} ${companySettings.city}</p>` : ''}
+                            ${companySettings.country ? `<p class="m-0">${companySettings.country}</p>` : ''}
                         </div>
                         <div>
-                            <h5 style="font-weight: 600; color: #374151; margin: 0 0 8px 0; font-size: 11px;">Kontakt</h5>
-                            ${companySettings.phone ? `<p style="margin: 0 0 2px 0;"><strong>Tel:</strong> ${companySettings.phone}</p>` : ''}
-                            ${companySettings.email ? `<p style="margin: 0 0 2px 0;"><strong>E-Mail:</strong> ${companySettings.email}</p>` : ''}
-                            ${companySettings.website ? `<p style="margin: 0 0 2px 0;"><strong>Web:</strong> ${companySettings.website}</p>` : ''}
-                            ${companySettings.tax_number ? `<p style="margin: 0;"><strong>MwSt-Nr:</strong> ${companySettings.tax_number}</p>` : ''}
+                            <h5 class="semibold text-gray-800 m-0 text-11" style="margin-bottom: 8px;">Kontakt</h5>
+                            ${companySettings.phone ? `<p class="m-0" style="margin-bottom: 2px;"><strong>Tel:</strong> ${companySettings.phone}</p>` : ''}
+                            ${companySettings.email ? `<p class="m-0" style="margin-bottom: 2px;"><strong>E-Mail:</strong> ${companySettings.email}</p>` : ''}
+                            ${companySettings.website ? `<p class="m-0" style="margin-bottom: 2px;"><strong>Web:</strong> ${companySettings.website}</p>` : ''}
+                            ${companySettings.tax_number ? `<p class="m-0"><strong>MwSt-Nr:</strong> ${companySettings.tax_number}</p>` : ''}
                         </div>
                         <div>
-                            <h5 style="font-weight: 600; color: #374151; margin: 0 0 8px 0; font-size: 11px;">Banking</h5>
-                            ${companySettings.iban ? `<p style="margin: 0 0 2px 0;"><strong>IBAN:</strong> ${companySettings.iban}</p>` : ''}
-                            ${companySettings.bank_account ? `<p style="margin: 0 0 2px 0;"><strong>Bank:</strong> ${companySettings.bank_account}</p>` : ''}
-                            ${companySettings.bic_swift ? `<p style="margin: 0;"><strong>BIC:</strong> ${companySettings.bic_swift}</p>` : ''}
+                            <h5 class="semibold text-gray-800 m-0 text-11" style="margin-bottom: 8px;">Banking</h5>
+                            ${companySettings.iban ? `<p class="m-0" style="margin-bottom: 2px;"><strong>IBAN:</strong> ${companySettings.iban}</p>` : ''}
+                            ${companySettings.bank_account ? `<p class="m-0" style="margin-bottom: 2px;"><strong>Bank:</strong> ${companySettings.bank_account}</p>` : ''}
+                            ${companySettings.bic_swift ? `<p class="m-0"><strong>BIC:</strong> ${companySettings.bic_swift}</p>` : ''}
                         </div>
                     </div>
-                    <div style="text-align: center; margin-top: 20px; padding-top: 15px; border-top: 1px solid #e5e7eb;">
-                        <p style="margin: 0; font-size: 10px; color: #9ca3af; font-style: italic;">
+                    <div class="text-center mt-20 pt-15 border-top-thin">
+                        <p class="m-0 text-10 text-gray-500 italic">
                             Diese Rechnung wurde automatisch generiert am ${new Date().toLocaleDateString('de-CH')} um ${new Date().toLocaleTimeString('de-CH')}.
                         </p>
                     </div>
@@ -1671,23 +1698,137 @@ async function generateInvoicePDF(id) {
             <html>
             <head>
                 <title>Rechnung ${invoice.invoice_number}</title>
+                <meta charset="UTF-8">
                 <style>
                     @page { 
                         margin: 1.5cm; 
                         size: A4;
                     }
+                    
                     @media print {
                         body { 
                             margin: 0; 
                             -webkit-print-color-adjust: exact;
                             print-color-adjust: exact;
                         }
+                        
+                        /* Ensure all elements are visible in print */
+                        * {
+                            -webkit-print-color-adjust: exact !important;
+                            print-color-adjust: exact !important;
+                        }
                     }
+                    
                     body { 
                         font-family: 'Helvetica', Arial, sans-serif; 
                         font-size: 12px;
                         line-height: 1.4;
                         color: #333;
+                        background-color: white;
+                        margin: 0;
+                        padding: 20px;
+                    }
+                    
+                    /* Ensure flexbox and grid work in print */
+                    .flex { display: flex !important; }
+                    .grid { display: grid !important; }
+                    .grid-3-cols { grid-template-columns: 1fr 1fr 1fr !important; }
+                    .gap-20 { gap: 20px !important; }
+                    .justify-between { justify-content: space-between !important; }
+                    .justify-end { justify-content: flex-end !important; }
+                    .align-start { align-items: flex-start !important; }
+                    .text-center { text-align: center !important; }
+                    .text-right { text-align: right !important; }
+                    
+                    /* Borders and backgrounds */
+                    .border-bottom { border-bottom: 2px solid #e5e7eb !important; }
+                    .border-top { border-top: 2px solid #d1d5db !important; }
+                    .border-top-thin { border-top: 1px solid #e5e7eb !important; }
+                    .bg-gray { background-color: #f9fafb !important; }
+                    .bg-header { background-color: #f3f4f6 !important; }
+                    
+                    /* Typography */
+                    .text-28 { font-size: 28px !important; }
+                    .text-18 { font-size: 18px !important; }
+                    .text-16 { font-size: 16px !important; }
+                    .text-12 { font-size: 12px !important; }
+                    .text-11 { font-size: 11px !important; }
+                    .text-10 { font-size: 10px !important; }
+                    .bold { font-weight: bold !important; }
+                    .semibold { font-weight: 600 !important; }
+                    .italic { font-style: italic !important; }
+                    
+                    /* Colors */
+                    .text-gray-900 { color: #1f2937 !important; }
+                    .text-gray-800 { color: #374151 !important; }
+                    .text-gray-600 { color: #6b7280 !important; }
+                    .text-gray-500 { color: #9ca3af !important; }
+                    
+                    /* Spacing */
+                    .m-0 { margin: 0 !important; }
+                    .mb-40 { margin-bottom: 40px !important; }
+                    .mb-30 { margin-bottom: 30px !important; }
+                    .mb-20 { margin-bottom: 20px !important; }
+                    .mb-15 { margin-bottom: 15px !important; }
+                    .mb-10 { margin-bottom: 10px !important; }
+                    .mb-5 { margin-bottom: 5px !important; }
+                    .mt-20 { margin-top: 20px !important; }
+                    .mt-15 { margin-top: 15px !important; }
+                    .p-20 { padding: 20px !important; }
+                    .p-15 { padding: 15px !important; }
+                    .p-12 { padding: 12px !important; }
+                    .pt-20 { padding-top: 20px !important; }
+                    .pt-15 { padding-top: 15px !important; }
+                    .pb-20 { padding-bottom: 20px !important; }
+                    
+                    /* Table specific styles */
+                    table {
+                        border-collapse: collapse !important;
+                        width: 100% !important;
+                        border: 1px solid #d1d5db !important;
+                        border-radius: 8px !important;
+                    }
+                    
+                    th, td {
+                        border-right: 1px solid #d1d5db !important;
+                        padding: 12px !important;
+                    }
+                    
+                    th {
+                        background-color: #f3f4f6 !important;
+                        font-weight: 600 !important;
+                        color: #374151 !important;
+                    }
+                    
+                    .table-row-even {
+                        background-color: #ffffff !important;
+                    }
+                    
+                    .table-row-odd {
+                        background-color: #f9fafb !important;
+                    }
+                    
+                    /* Box styles */
+                    .totals-box {
+                        width: 300px !important;
+                        background-color: #f9fafb !important;
+                        padding: 20px !important;
+                        border-radius: 8px !important;
+                        border: 1px solid #e5e7eb !important;
+                    }
+                    
+                    .customer-box {
+                        background-color: #f9fafb !important;
+                        padding: 20px !important;
+                        border-radius: 8px !important;
+                        border-left: 4px solid #3b82f6 !important;
+                    }
+                    
+                    /* Image styles */
+                    img {
+                        max-height: 60px !important;
+                        max-width: 200px !important;
+                        object-fit: contain !important;
                     }
                 </style>
             </head>
