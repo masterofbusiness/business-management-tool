@@ -338,9 +338,17 @@ function showCustomerModal(customerId = null) {
 }
 
 async function saveCustomer(customerId = null) {
+    // Debug: Log form values to see what's being captured
+    const companyName = document.getElementById('company_name').value;
+    const contactPerson = document.getElementById('contact_person').value;
+    
+    console.log('DEBUG - Form values captured:');
+    console.log('Company Name:', companyName);
+    console.log('Contact Person:', contactPerson);
+    
     const formData = {
-        company_name: document.getElementById('company_name').value,
-        contact_person: document.getElementById('contact_person').value,
+        company_name: companyName,
+        contact_person: contactPerson,
         email: document.getElementById('email').value,
         phone: document.getElementById('phone').value,
         address: document.getElementById('address').value,
@@ -351,12 +359,17 @@ async function saveCustomer(customerId = null) {
         notes: document.getElementById('notes').value
     };
     
+    console.log('DEBUG - FormData being sent:', formData);
+    
     try {
+        let response;
         if (customerId) {
-            await axios.put(`/api/customers/${customerId}`, formData);
+            response = await axios.put(`/api/customers/${customerId}`, formData);
         } else {
-            await axios.post('/api/customers', formData);
+            response = await axios.post('/api/customers', formData);
         }
+        
+        console.log('DEBUG - Server response:', response.data);
         
         closeModal('customer-modal');
         await loadCustomers();

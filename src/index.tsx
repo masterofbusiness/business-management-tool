@@ -102,6 +102,12 @@ app.put('/api/customers/:id', async (c) => {
     const id = c.req.param('id')
     const data = await c.req.json()
     
+    // Debug logging
+    console.log('DEBUG - Customer PUT request received:')
+    console.log('ID:', id)
+    console.log('Data received:', JSON.stringify(data, null, 2))
+    console.log('Company name from data:', data.company_name)
+    
     const { success } = await c.env.DB.prepare(`
       UPDATE customers SET 
         company_name = ?, contact_person = ?, email = ?, phone = ?,
@@ -123,7 +129,13 @@ app.put('/api/customers/:id', async (c) => {
       id
     ).run()
 
+    console.log('DEBUG - Update success:', success)
+
     if (success) {
+      // Get the updated record to see what was actually saved
+      const updated = await c.env.DB.prepare('SELECT * FROM customers WHERE id = ?').bind(id).first()
+      console.log('DEBUG - Updated record in database:', JSON.stringify(updated, null, 2))
+      
       return c.json({ id, ...data })
     }
     throw new Error('Failed to update customer')
