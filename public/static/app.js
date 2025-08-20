@@ -259,9 +259,15 @@ function renderCustomersTable() {
     `).join('');
 }
 
-function showCustomerModal(customerId = null) {
+async function showCustomerModal(customerId = null) {
     console.log('DEBUG - showCustomerModal called with ID:', customerId);
-    console.log('DEBUG - currentCustomers array:', currentCustomers);
+    
+    // FORCE reload customers to get fresh data from database
+    if (customerId) {
+        console.log('DEBUG - Forcing customer data reload before edit...');
+        await loadCustomers();
+        console.log('DEBUG - Fresh currentCustomers array:', currentCustomers);
+    }
     
     const customer = customerId ? currentCustomers.find(c => c.id === customerId) : null;
     console.log('DEBUG - Found customer for editing:', customer);
@@ -385,8 +391,8 @@ async function saveCustomer(customerId = null) {
     }
 }
 
-function editCustomer(customerId) {
-    showCustomerModal(customerId);
+async function editCustomer(customerId) {
+    await showCustomerModal(customerId);
 }
 
 async function deleteCustomer(customerId) {
