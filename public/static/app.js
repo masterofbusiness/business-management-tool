@@ -184,6 +184,17 @@ async function loadCustomers() {
     }
 }
 
+// Get customer display name (company name or contact person as fallback)
+function getCustomerDisplayName(customer) {
+    if (customer.company_name && customer.company_name.trim() !== '') {
+        return customer.company_name;
+    }
+    if (customer.contact_person && customer.contact_person.trim() !== '') {
+        return customer.contact_person;
+    }
+    return `Kunde #${customer.id}`;
+}
+
 // Update all customer dropdowns in the current page
 function updateCustomerDropdowns() {
     const customerSelects = [
@@ -199,7 +210,7 @@ function updateCustomerDropdowns() {
             const currentValue = select.value;
             select.innerHTML = '<option value="">Kunde auswählen</option>' + 
                 currentCustomers.map(customer => 
-                    `<option value="${customer.id}" ${currentValue == customer.id ? 'selected' : ''}>${customer.company_name}</option>`
+                    `<option value="${customer.id}" ${currentValue == customer.id ? 'selected' : ''}>${getCustomerDisplayName(customer)}</option>`
                 ).join('');
         }
     });
@@ -440,7 +451,7 @@ function showTimeEntryModal(entryId = null) {
     
     // Create customer options
     const customerOptions = currentCustomers.map(customer => 
-        `<option value="${customer.id}" ${entry?.customer_id === customer.id ? 'selected' : ''}>${customer.company_name}</option>`
+        `<option value="${customer.id}" ${entry?.customer_id === customer.id ? 'selected' : ''}>${getCustomerDisplayName(customer)}</option>`
     ).join('');
     
     const modalHtml = `
@@ -598,7 +609,7 @@ function showTimerSaveModal() {
     }
     
     const customerOptions = currentCustomers.map(customer => 
-        `<option value="${customer.id}">${customer.company_name}</option>`
+        `<option value="${customer.id}">${getCustomerDisplayName(customer)}</option>`
     ).join('');
     
     // Also load projects for selection
@@ -824,7 +835,7 @@ function showProjectModal(projectId = null) {
     const isEdit = !!project;
     
     const customerOptions = currentCustomers.map(customer => 
-        `<option value="${customer.id}" ${project?.customer_id === customer.id ? 'selected' : ''}>${customer.company_name}</option>`
+        `<option value="${customer.id}" ${project?.customer_id === customer.id ? 'selected' : ''}>${getCustomerDisplayName(customer)}</option>`
     ).join('');
     
     const modalHtml = `
@@ -1068,7 +1079,7 @@ async function showInvoiceModal(invoiceId = null) {
     const isEdit = !!invoice;
     
     const customerOptions = currentCustomers.map(customer => 
-        `<option value="${customer.id}" ${invoice?.customer_id === customer.id ? 'selected' : ''}>${customer.company_name}</option>`
+        `<option value="${customer.id}" ${invoice?.customer_id === customer.id ? 'selected' : ''}>${getCustomerDisplayName(customer)}</option>`
     ).join('');
     
     const modalHtml = `
@@ -1574,55 +1585,55 @@ async function generateInvoicePDF(id) {
         
         // Create professional PDF content with company settings
         const pdfContent = `
-            <div style="max-width: 210mm; margin: 0 auto;">
+            <div style="max-width: 210mm; margin: 0 auto; font-family: 'Helvetica', Arial, sans-serif;">
                 <!-- Header with Logo -->
-                <div class="flex justify-between align-start mb-40 border-bottom pb-20">
-                    <div class="flex align-start" style="gap: 20px;">
-                        ${companySettings.logo_url ? `<img src="${companySettings.logo_url}" alt="Logo">` : ''}
+                <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 40px; border-bottom: 2px solid #e5e7eb; padding-bottom: 20px;">
+                    <div style="display: flex; align-items: flex-start; gap: 20px;">
+                        ${companySettings.logo_url ? `<img src="${companySettings.logo_url}" alt="Logo" style="max-height: 60px; max-width: 200px; object-fit: contain;">` : ''}
                         <div>
-                            <h1 class="text-28 bold text-gray-900 m-0 mb-10">RECHNUNG</h1>
-                            <p class="text-18 semibold text-gray-800 m-0">${invoice.invoice_number}</p>
+                            <h1 style="font-size: 28px; font-weight: bold; color: #1f2937; margin: 0 0 10px 0;">RECHNUNG</h1>
+                            <p style="font-size: 18px; font-weight: 600; color: #374151; margin: 0;">${invoice.invoice_number}</p>
                         </div>
                     </div>
-                    <div class="text-right text-12 text-gray-600">
-                        <p class="m-0 mb-5"><strong>Rechnungsdatum:</strong> ${new Date(invoice.issue_date).toLocaleDateString('de-CH')}</p>
-                        ${invoice.due_date ? `<p class="m-0 mb-5"><strong>Fälligkeitsdatum:</strong> ${new Date(invoice.due_date).toLocaleDateString('de-CH')}</p>` : ''}
-                        <p class="m-0"><strong>Status:</strong> ${getInvoiceStatusText(invoice.status)}</p>
+                    <div style="text-align: right; font-size: 12px; color: #6b7280;">
+                        <p style="margin: 0 0 5px 0;"><strong>Rechnungsdatum:</strong> ${new Date(invoice.issue_date).toLocaleDateString('de-CH')}</p>
+                        ${invoice.due_date ? `<p style="margin: 0 0 5px 0;"><strong>Fälligkeitsdatum:</strong> ${new Date(invoice.due_date).toLocaleDateString('de-CH')}</p>` : ''}
+                        <p style="margin: 0;"><strong>Status:</strong> ${getInvoiceStatusText(invoice.status)}</p>
                     </div>
                 </div>
                 
                 <!-- Customer Address -->
-                <div class="mb-40">
-                    <h3 class="text-16 semibold mb-15 text-gray-800">Rechnungsadresse:</h3>
-                    <div class="customer-box">
-                        <p class="semibold m-0 mb-5 text-16">${invoice.company_name}</p>
-                        ${invoice.contact_person ? `<p class="m-0 mb-5">${invoice.contact_person}</p>` : ''}
-                        ${invoice.address ? `<p class="m-0 mb-5">${invoice.address}</p>` : ''}
-                        ${invoice.postal_code && invoice.city ? `<p class="m-0 mb-5">${invoice.postal_code} ${invoice.city}</p>` : ''}
-                        ${invoice.country ? `<p class="m-0 mb-10">${invoice.country}</p>` : ''}
-                        ${invoice.email ? `<p class="m-0 text-gray-600"><strong>E-Mail:</strong> ${invoice.email}</p>` : ''}
+                <div style="margin-bottom: 40px;">
+                    <h3 style="font-size: 16px; font-weight: 600; margin-bottom: 15px; color: #374151;">Rechnungsadresse:</h3>
+                    <div style="background-color: #f9fafb; padding: 20px; border-radius: 8px; border-left: 4px solid #3b82f6;">
+                        <p style="font-weight: 600; margin: 0 0 5px 0; font-size: 16px;">${invoice.company_name || invoice.contact_person}</p>
+                        ${invoice.contact_person && invoice.company_name ? `<p style="margin: 0 0 5px 0;">${invoice.contact_person}</p>` : ''}
+                        ${invoice.address ? `<p style="margin: 0 0 5px 0;">${invoice.address}</p>` : ''}
+                        ${invoice.postal_code && invoice.city ? `<p style="margin: 0 0 5px 0;">${invoice.postal_code} ${invoice.city}</p>` : ''}
+                        ${invoice.country ? `<p style="margin: 0 0 10px 0;">${invoice.country}</p>` : ''}
+                        ${invoice.email ? `<p style="margin: 0; color: #6b7280;"><strong>E-Mail:</strong> ${invoice.email}</p>` : ''}
                     </div>
                 </div>
                 
                 <!-- Items Table -->
-                <div class="mb-40">
-                    <h3 class="text-16 semibold mb-15 text-gray-800">Rechnungsposten:</h3>
-                    <table>
+                <div style="margin-bottom: 40px;">
+                    <h3 style="font-size: 16px; font-weight: 600; margin-bottom: 15px; color: #374151;">Rechnungsposten:</h3>
+                    <table style="width: 100%; border-collapse: collapse; border: 1px solid #d1d5db; border-radius: 8px;">
                         <thead>
-                            <tr class="bg-header">
-                                <th style="text-align: left;">Beschreibung</th>
-                                <th style="text-align: center; width: 80px;">Menge</th>
-                                <th style="text-align: right; width: 100px;">Einzelpreis</th>
-                                <th style="border-right: none; text-align: right; width: 100px;">Summe</th>
+                            <tr style="background-color: #f3f4f6;">
+                                <th style="border-right: 1px solid #d1d5db; padding: 12px; text-align: left; font-weight: 600; color: #374151;">Beschreibung</th>
+                                <th style="border-right: 1px solid #d1d5db; padding: 12px; text-align: center; font-weight: 600; color: #374151; width: 80px;">Menge</th>
+                                <th style="border-right: 1px solid #d1d5db; padding: 12px; text-align: right; font-weight: 600; color: #374151; width: 100px;">Einzelpreis</th>
+                                <th style="padding: 12px; text-align: right; font-weight: 600; color: #374151; width: 100px;">Summe</th>
                             </tr>
                         </thead>
                         <tbody>
                             ${items.map((item, index) => `
-                                <tr class="${index % 2 === 0 ? 'table-row-even' : 'table-row-odd'}">
-                                    <td class="text-gray-800">${item.description}</td>
-                                    <td class="text-center text-gray-800">${item.quantity}</td>
-                                    <td class="text-right text-gray-800">${formatCurrency(item.unit_price)}</td>
-                                    <td class="text-right semibold text-gray-900" style="border-right: none;">${formatCurrency(item.total)}</td>
+                                <tr style="background-color: ${index % 2 === 0 ? '#ffffff' : '#f9fafb'};">
+                                    <td style="border-right: 1px solid #e5e7eb; padding: 12px; color: #374151;">${item.description}</td>
+                                    <td style="border-right: 1px solid #e5e7eb; padding: 12px; text-align: center; color: #374151;">${item.quantity}</td>
+                                    <td style="border-right: 1px solid #e5e7eb; padding: 12px; text-align: right; color: #374151;">${formatCurrency(item.unit_price)}</td>
+                                    <td style="padding: 12px; text-align: right; font-weight: 600; color: #1f2937;">${formatCurrency(item.total)}</td>
                                 </tr>
                             `).join('')}
                         </tbody>
@@ -1630,18 +1641,18 @@ async function generateInvoicePDF(id) {
                 </div>
                 
                 <!-- Totals -->
-                <div class="flex justify-end mb-40">
-                    <div class="totals-box">
-                        <div class="flex justify-between mb-10 text-gray-800">
+                <div style="display: flex; justify-content: flex-end; margin-bottom: 40px;">
+                    <div style="width: 300px; background-color: #f9fafb; padding: 20px; border-radius: 8px; border: 1px solid #e5e7eb;">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 10px; color: #374151;">
                             <span>Zwischensumme:</span>
-                            <span class="semibold">${formatCurrency(subtotal)}</span>
+                            <span style="font-weight: 600;">${formatCurrency(subtotal)}</span>
                         </div>
-                        <div class="flex justify-between mb-15 text-gray-800">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 15px; color: #374151;">
                             <span>MwSt. (${invoice.tax_rate}%):</span>
-                            <span class="semibold">${formatCurrency(taxAmount)}</span>
+                            <span style="font-weight: 600;">${formatCurrency(taxAmount)}</span>
                         </div>
                         <hr style="margin: 15px 0; border: 1px solid #374151;">
-                        <div class="flex justify-between text-18 bold text-gray-900">
+                        <div style="display: flex; justify-content: space-between; font-size: 18px; font-weight: bold; color: #1f2937;">
                             <span>Gesamtbetrag:</span>
                             <span>${formatCurrency(totalAmount)}</span>
                         </div>
@@ -1650,39 +1661,39 @@ async function generateInvoicePDF(id) {
                 
                 <!-- Payment Terms & Notes -->
                 ${(invoice.payment_terms || invoice.notes) ? `
-                <div class="border-top-thin pt-20 mb-30 text-12 text-gray-600">
-                    ${invoice.payment_terms ? `<p class="m-0 mb-10"><strong>Zahlungsbedingungen:</strong> ${invoice.payment_terms}</p>` : ''}
-                    ${invoice.notes ? `<p class="m-0 mb-10"><strong>Notizen:</strong> ${invoice.notes}</p>` : ''}
+                <div style="border-top: 1px solid #e5e7eb; padding-top: 20px; margin-bottom: 30px; font-size: 12px; color: #6b7280;">
+                    ${invoice.payment_terms ? `<p style="margin: 0 0 10px 0;"><strong>Zahlungsbedingungen:</strong> ${invoice.payment_terms}</p>` : ''}
+                    ${invoice.notes ? `<p style="margin: 0 0 10px 0;"><strong>Notizen:</strong> ${invoice.notes}</p>` : ''}
                 </div>
                 ` : ''}
                 
                 <!-- Professional Footer with Company Info -->
                 ${companySettings.company_name ? `
-                <div class="border-top pt-20 mt-30">
-                    <div class="grid grid-3-cols gap-20 text-10 text-gray-600">
+                <div style="border-top: 2px solid #d1d5db; padding-top: 20px; margin-top: 30px;">
+                    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; font-size: 10px; color: #6b7280;">
                         <div>
-                            <h5 class="semibold text-gray-800 m-0 text-11" style="margin-bottom: 8px;">Rechnungssteller</h5>
-                            <p class="semibold text-gray-900 m-0" style="margin-bottom: 3px;">${companySettings.company_name}</p>
-                            ${companySettings.address ? `<p class="m-0" style="margin-bottom: 2px;">${companySettings.address}</p>` : ''}
-                            ${companySettings.postal_code && companySettings.city ? `<p class="m-0" style="margin-bottom: 2px;">${companySettings.postal_code} ${companySettings.city}</p>` : ''}
-                            ${companySettings.country ? `<p class="m-0">${companySettings.country}</p>` : ''}
+                            <h5 style="font-weight: 600; color: #374151; margin: 0 0 8px 0; font-size: 11px;">Rechnungssteller</h5>
+                            <p style="font-weight: 600; color: #1f2937; margin: 0 0 3px 0;">${companySettings.company_name}</p>
+                            ${companySettings.address ? `<p style="margin: 0 0 2px 0;">${companySettings.address}</p>` : ''}
+                            ${companySettings.postal_code && companySettings.city ? `<p style="margin: 0 0 2px 0;">${companySettings.postal_code} ${companySettings.city}</p>` : ''}
+                            ${companySettings.country ? `<p style="margin: 0;">${companySettings.country}</p>` : ''}
                         </div>
                         <div>
-                            <h5 class="semibold text-gray-800 m-0 text-11" style="margin-bottom: 8px;">Kontakt</h5>
-                            ${companySettings.phone ? `<p class="m-0" style="margin-bottom: 2px;"><strong>Tel:</strong> ${companySettings.phone}</p>` : ''}
-                            ${companySettings.email ? `<p class="m-0" style="margin-bottom: 2px;"><strong>E-Mail:</strong> ${companySettings.email}</p>` : ''}
-                            ${companySettings.website ? `<p class="m-0" style="margin-bottom: 2px;"><strong>Web:</strong> ${companySettings.website}</p>` : ''}
-                            ${companySettings.tax_number ? `<p class="m-0"><strong>MwSt-Nr:</strong> ${companySettings.tax_number}</p>` : ''}
+                            <h5 style="font-weight: 600; color: #374151; margin: 0 0 8px 0; font-size: 11px;">Kontakt</h5>
+                            ${companySettings.phone ? `<p style="margin: 0 0 2px 0;"><strong>Tel:</strong> ${companySettings.phone}</p>` : ''}
+                            ${companySettings.email ? `<p style="margin: 0 0 2px 0;"><strong>E-Mail:</strong> ${companySettings.email}</p>` : ''}
+                            ${companySettings.website ? `<p style="margin: 0 0 2px 0;"><strong>Web:</strong> ${companySettings.website}</p>` : ''}
+                            ${companySettings.tax_number ? `<p style="margin: 0;"><strong>MwSt-Nr:</strong> ${companySettings.tax_number}</p>` : ''}
                         </div>
                         <div>
-                            <h5 class="semibold text-gray-800 m-0 text-11" style="margin-bottom: 8px;">Banking</h5>
-                            ${companySettings.iban ? `<p class="m-0" style="margin-bottom: 2px;"><strong>IBAN:</strong> ${companySettings.iban}</p>` : ''}
-                            ${companySettings.bank_account ? `<p class="m-0" style="margin-bottom: 2px;"><strong>Bank:</strong> ${companySettings.bank_account}</p>` : ''}
-                            ${companySettings.bic_swift ? `<p class="m-0"><strong>BIC:</strong> ${companySettings.bic_swift}</p>` : ''}
+                            <h5 style="font-weight: 600; color: #374151; margin: 0 0 8px 0; font-size: 11px;">Banking</h5>
+                            ${companySettings.iban ? `<p style="margin: 0 0 2px 0;"><strong>IBAN:</strong> ${companySettings.iban}</p>` : ''}
+                            ${companySettings.bank_account ? `<p style="margin: 0 0 2px 0;"><strong>Bank:</strong> ${companySettings.bank_account}</p>` : ''}
+                            ${companySettings.bic_swift ? `<p style="margin: 0;"><strong>BIC:</strong> ${companySettings.bic_swift}</p>` : ''}
                         </div>
                     </div>
-                    <div class="text-center mt-20 pt-15 border-top-thin">
-                        <p class="m-0 text-10 text-gray-500 italic">
+                    <div style="text-align: center; margin-top: 20px; padding-top: 15px; border-top: 1px solid #e5e7eb;">
+                        <p style="margin: 0; font-size: 10px; color: #9ca3af; font-style: italic;">
                             Diese Rechnung wurde automatisch generiert am ${new Date().toLocaleDateString('de-CH')} um ${new Date().toLocaleTimeString('de-CH')}.
                         </p>
                     </div>
@@ -1861,7 +1872,7 @@ function showCreateInvoiceFromTimeModal() {
     }
     
     const customerOptions = currentCustomers.map(customer => 
-        `<option value="${customer.id}">${customer.company_name}</option>`
+        `<option value="${customer.id}">${getCustomerDisplayName(customer)}</option>`
     ).join('');
     
     const modalHtml = `
